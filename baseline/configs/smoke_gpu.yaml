@@ -1,0 +1,35 @@
+run:
+  id: smoke_gpu
+  seed: 1001
+  device: cuda
+  deterministic: true
+
+self_play:
+  iterations: 4
+  games_per_iteration: 2
+  mcts_simulations: 8
+  temperature_threshold: 15
+  dirichlet_noise: false
+  max_game_length: 150
+
+training:
+  epochs: 1
+  batch_size: 16
+  max_samples: 128
+  replay_history_iterations: 2
+  learning_rate: 0.0002
+  amp: false
+
+checkpoint:
+  save_every_iterations: 1
+
+evaluation:
+  enabled: true
+  games_per_opponent: 2
+  opponents:
+    - random
+    - greedy
+  model_mcts_simulations: 8
+  temperature: 0
+  dirichlet_noise: false
+  max_game_length: 150

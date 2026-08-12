@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyquoridor"
+version = "0.0.5"
+authors = [
+  { name="Ramon Viñas Torné", email="playquoridor@gmail.com" },
+]
+description = "An easy-to-use, lightweight Python library for Quoridor"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy",
+]
+
+[project.urls]
+Homepage = "https://github.com/playquoridor/python-quoridor"
+Issues = "https://github.com/playquoridor/python-quoridor/issues"

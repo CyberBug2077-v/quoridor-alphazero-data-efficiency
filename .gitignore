@@ -1,0 +1,65 @@
+# Python caches and tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local Python and Conda environments
+.venv/
+venv/
+env/
+.conda/
+
+# Native and package build products
+build/
+dist/
+*.egg-info/
+*.pyd
+*.so
+*.dll
+*.obj
+*.lib
+*.exp
+
+# Node dependencies
+node_modules/
+
+# Model, checkpoint, and serialized training artifacts
+*.pt
+*.pth
+*.pth.tar
+*.ckpt
+*.onnx
+*.pkl
+*.pickle
+*.examples
+
+# Large local datasets and archives
+baseline/data/**/*.zip
+baseline/data/**/*.tar
+baseline/data/**/*.tar.gz
+
+# Generated experiment output
+baseline/outputs/
+extension/outputs/
+baseline/external/alphazero/temp/
+baseline/external/alphazero/training_runs/
+
+# Logs and temporary files
+logs/
+*.log
+*.tmp
+*.temp
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini

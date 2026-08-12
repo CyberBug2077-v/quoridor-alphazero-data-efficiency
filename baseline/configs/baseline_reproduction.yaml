@@ -1,0 +1,32 @@
+run:
+  id: baseline_reproduction
+  seed: 1001
+  device: cuda
+  deterministic: false
+
+self_play:
+  iterations: null
+  games_per_iteration: 75
+  mcts_simulations: 200
+  temperature_threshold: 15
+  cpuct: 1.25
+  dirichlet_noise: true
+  dirichlet_alpha: 0.15
+  dirichlet_epsilon: 0.25
+  max_game_length: 150
+
+training:
+  epochs: 4
+  batch_size: 2048
+  learning_rate: 0.0002
+  max_samples: 200000
+  replay_history_iterations: 150
+  amp: true
+  update_gating: false
+  expert_top_up: false
+
+checkpoint:
+  save_every_iterations: 1
+
+evaluation:
+  enabled: false

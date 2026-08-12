@@ -1,0 +1,18 @@
+# Core dependencies
+numpy
+tqdm
+matplotlib
+PyYAML
+
+# AlphaZero dependencies
+torch
+torchvision
+torchaudio
+progress
+einops
+fancy-einsum
+node
+psutil
+
+# Pyquoridor (install from local package)
+# Install with: pip install -e ./external/quoridor-server

@@ -1,0 +1,10 @@
+# --- PyTorch (CUDA 12.6 builds) ---
+torch
+torchvision
+torchaudio
+
+# --- Dependencies for AlphaZero ---
+numpy
+progress
+einops
+fancy-einsum
