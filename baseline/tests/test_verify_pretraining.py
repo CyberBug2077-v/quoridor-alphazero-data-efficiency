@@ -66,7 +66,11 @@ def pretraining_artifacts(tmp_path: Path, monkeypatch) -> Path:
             "expected_sha256": dataset_hash,
         },
         "model": model_config,
-        "pretraining": {"epochs": 10},
+        "pretraining": {
+            "epochs": 10,
+            "batch_size": 2,
+            "micro_batch_size": 1,
+        },
         "checkpoint": {
             "directory": f"outputs/{run_dir.name}/checkpoints",
             "checkpoint_0_filename": checkpoint.name,
@@ -111,6 +115,10 @@ def pretraining_artifacts(tmp_path: Path, monkeypatch) -> Path:
             "epochs": 10,
             "optimizer_steps": 2,
             "samples_seen": 4,
+            "effective_batch_size": 2,
+            "micro_batch_size": 1,
+            "gradient_accumulation_steps": 2,
+            "micro_batches_processed": 4,
             "policy_loss": 2.0,
             "value_loss": 0.5,
             "total_loss": 2.5,

@@ -27,6 +27,7 @@ args = dotdict({
     'dropout': 0.3,
     'epochs': 4,
     'batch_size': 512,
+    'micro_batch_size': 512,
     'cuda': torch.cuda.is_available(),
     'num_channels': 128,
     'clip': 1.0,
@@ -101,7 +102,16 @@ class NNetWrapper(NeuralNet):
         if available_examples is None:
             available_examples = examples_used
 
+        effective_batch_size = int(net_args.batch_size)
+        micro_batch_size = int(net_args.get('micro_batch_size', effective_batch_size))
+        if micro_batch_size > effective_batch_size:
+            raise ValueError("micro_batch_size must be <= batch_size")
+        if effective_batch_size % micro_batch_size != 0:
+            raise ValueError("batch_size must be divisible by micro_batch_size")
+        accumulation_steps = effective_batch_size // micro_batch_size
+
         optimizer_steps = 0
+        micro_batches_processed = 0
         samples_seen = 0
         policy_loss_sum = 0.0
         value_loss_sum = 0.0
@@ -127,6 +137,10 @@ class NNetWrapper(NeuralNet):
                 "samples_seen": samples_seen,
                 "training_batches": optimizer_steps,
                 "optimizer_steps": optimizer_steps,
+                "effective_batch_size": effective_batch_size,
+                "micro_batch_size": micro_batch_size,
+                "gradient_accumulation_steps": accumulation_steps,
+                "micro_batches_processed": micro_batches_processed,
                 "policy_loss": mean_policy_loss,
                 "value_loss": mean_value_loss,
                 "total_loss": mean_total_loss,
@@ -153,7 +167,11 @@ class NNetWrapper(NeuralNet):
         if len(examples[0]) < 4:
             withValids = False
 
-        print(f"TRAINING FOR {net_args.epochs} EPOCHS  |  {len(examples):,} examples  |  batch {net_args.batch_size}")
+        print(
+            f"TRAINING FOR {net_args.epochs} EPOCHS  |  {len(examples):,} examples  "
+            f"|  effective batch {effective_batch_size}  |  micro batch {micro_batch_size}  "
+            f"|  accumulation {accumulation_steps}"
+        )
         for epoch in range(net_args.epochs):
             self.nnet.train()
             data_time = AverageMeter()
@@ -163,67 +181,102 @@ class NNetWrapper(NeuralNet):
             epoch_start = time.time()
             end = time.time()
 
-            bar = Bar('Training Net', max=int(len(examples)/net_args.batch_size))
+            effective_batches = int(len(examples) / effective_batch_size)
+            bar = Bar('Training Net', max=effective_batches)
             batch_idx = 0
 
-            while batch_idx < int(len(examples)/net_args.batch_size):
-                sample_ids = np.random.randint(len(examples), size=net_args.batch_size)
-                if withValids:
-                    res = list(zip(*[examples[i] for i in sample_ids]))
-                    boards, pis, vs, valids = res[0], res[1], res[2], res[3]
-                else:
-                    boards, pis, vs = list(zip(*[examples[i] for i in sample_ids]))
-                boards = torch.FloatTensor(np.array(boards).astype(np.uint8))
-                target_pis = torch.FloatTensor(np.array(pis))
-                target_vs = torch.FloatTensor(np.array(vs).astype(np.float64))
-                if withValids:
-                    valids = torch.FloatTensor(np.array(valids).astype(np.uint8))
-
-                # predict
-                if net_args.cuda:
-                    boards, target_pis, target_vs = boards.contiguous().cuda(), target_pis.contiguous().cuda(), target_vs.contiguous().cuda()
-                    if withValids:
-                        valids = valids.contiguous().cuda()
-                boards, target_pis, target_vs, valids = Variable(boards), Variable(target_pis), Variable(target_vs), Variable(valids)
-
-                # measure data loading time
+            while batch_idx < effective_batches:
+                sample_ids = np.random.randint(
+                    len(examples), size=effective_batch_size
+                )
                 data_time.update(time.time() - end)
-
-                # Use Automatic Mixed Precision (AMP)
-                optimizer.zero_grad()
-
+                optimizer.zero_grad(set_to_none=True)
+                step_policy_loss = 0.0
+                step_value_loss = 0.0
+                step_total_loss = 0.0
+                valid_effective_batch = True
                 amp_device = "cuda" if net_args.cuda else "cpu"
-                with torch.amp.autocast(device_type=amp_device, enabled=self.use_amp, dtype=self.amp_dtype):
-                    out_pi, out_v = self._fwd(boards, withValids)
 
+                for micro_index in range(accumulation_steps):
+                    start = micro_index * micro_batch_size
+                    stop = start + micro_batch_size
+                    micro_ids = sample_ids[start:stop]
                     if withValids:
-                        out_pi = out_pi * valids
-                        out_pi[valids == 0.0] = float('-inf')
-                        out_pi = F.softmax(out_pi, dim=1)
+                        res = list(zip(*[examples[i] for i in micro_ids]))
+                        boards, pis, vs, valids = res[0], res[1], res[2], res[3]
+                    else:
+                        boards, pis, vs = list(zip(*[examples[i] for i in micro_ids]))
+                        valids = None
+                    boards = torch.FloatTensor(np.array(boards).astype(np.uint8))
+                    target_pis = torch.FloatTensor(np.array(pis))
+                    target_vs = torch.FloatTensor(np.array(vs).astype(np.float64))
+                    if withValids:
+                        valids = torch.FloatTensor(np.array(valids).astype(np.uint8))
 
-                    l_pi = self.loss_pi(target_pis, out_pi)
-                    l_v = self.loss_v(target_vs, out_v)
-                    total_loss = l_pi + l_v
+                    if net_args.cuda:
+                        boards = boards.contiguous().cuda()
+                        target_pis = target_pis.contiguous().cuda()
+                        target_vs = target_vs.contiguous().cuda()
+                        if withValids:
+                            valids = valids.contiguous().cuda()
+                    boards = Variable(boards)
+                    target_pis = Variable(target_pis)
+                    target_vs = Variable(target_vs)
+                    if withValids:
+                        valids = Variable(valids)
 
-                # Check for NaN in loss before backprop
-                if torch.isnan(total_loss) or torch.isinf(total_loss):
-                    print(f"WARNING: NaN/Inf detected in loss at batch {batch_idx}. Skipping batch.")
-                    print(f"  Loss_pi: {l_pi.item():.4f}, Loss_v: {l_v.item():.4f}")
+                    with torch.amp.autocast(
+                        device_type=amp_device,
+                        enabled=self.use_amp,
+                        dtype=self.amp_dtype,
+                    ):
+                        out_pi, out_v = self._fwd(boards, withValids)
+
+                        if withValids:
+                            out_pi = out_pi * valids
+                            out_pi[valids == 0.0] = float('-inf')
+                            out_pi = F.softmax(out_pi, dim=1)
+
+                        l_pi = self.loss_pi(target_pis, out_pi)
+                        l_v = self.loss_v(target_vs, out_v)
+                        total_loss = l_pi + l_v
+
+                    if torch.isnan(total_loss) or torch.isinf(total_loss):
+                        print(
+                            f"WARNING: NaN/Inf detected in loss at batch {batch_idx}, "
+                            f"micro-batch {micro_index}. Skipping effective batch."
+                        )
+                        print(
+                            f"  Loss_pi: {l_pi.item():.4f}, "
+                            f"Loss_v: {l_v.item():.4f}"
+                        )
+                        valid_effective_batch = False
+                        break
+
+                    backward_loss = total_loss / accumulation_steps
+                    if self.use_amp and self.amp_dtype == torch.float16:
+                        self.scaler.scale(backward_loss).backward()
+                    else:
+                        backward_loss.backward()
+                    micro_batches_processed += 1
+                    step_policy_loss += l_pi.item() / accumulation_steps
+                    step_value_loss += l_v.item() / accumulation_steps
+                    step_total_loss += total_loss.item() / accumulation_steps
+
+                if not valid_effective_batch:
+                    optimizer.zero_grad(set_to_none=True)
                     continue
 
                 if self.use_amp and self.amp_dtype == torch.float16:
-                    self.scaler.scale(total_loss).backward()
                     self.scaler.unscale_(optimizer)
-                else:
-                    total_loss.backward()
 
-                # Check for NaN in gradients
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.nnet.parameters(), net_args.clip)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.nnet.parameters(), net_args.clip
+                )
                 if torch.isnan(grad_norm) or torch.isinf(grad_norm):
                     print(f"WARNING: NaN/Inf detected in gradients at batch {batch_idx}. Skipping update.")
-                    optimizer.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
                     if self.use_amp and self.amp_dtype == torch.float16:
-                        # Reset scaler state after unscale_ to avoid RuntimeError on next iteration.
                         self.scaler.update()
                     continue
 
@@ -238,10 +291,10 @@ class NNetWrapper(NeuralNet):
                 if optimizer_steps == steps_before_update:
                     continue
 
-                batch_samples = boards.size(0)
-                policy_loss_value = l_pi.item()
-                value_loss_value = l_v.item()
-                total_loss_value = total_loss.item()
+                batch_samples = effective_batch_size
+                policy_loss_value = step_policy_loss
+                value_loss_value = step_value_loss
+                total_loss_value = step_total_loss
                 grad_norm_value = float(grad_norm)
                 samples_seen += batch_samples
                 policy_loss_sum += policy_loss_value
@@ -262,7 +315,7 @@ class NNetWrapper(NeuralNet):
                 # plot progress
                 bar.suffix  = '({batch}/{size}) Data: {data:.3f}s | Batch: {bt:.3f}s | Total: {total:} | ETA: {eta:} | Loss_pi: {lpi:.4f} | Loss_v: {lv:.3f}'.format(
                             batch=batch_idx,
-                            size=int(len(examples)/net_args.batch_size),
+                            size=effective_batches,
                             data=data_time.avg,
                             bt=batch_time.avg,
                             total=bar.elapsed_td,

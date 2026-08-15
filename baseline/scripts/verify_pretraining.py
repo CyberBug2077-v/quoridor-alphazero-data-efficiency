@@ -175,12 +175,45 @@ def verify_metrics(
         and expected_epochs > 0,
         "configured pretraining epochs are invalid",
     )
+    expected_effective_batch = resolved["pretraining"].get("batch_size")
+    expected_micro_batch = resolved["pretraining"].get("micro_batch_size")
+    require(
+        isinstance(expected_effective_batch, int)
+        and expected_effective_batch > 0
+        and isinstance(expected_micro_batch, int)
+        and expected_micro_batch > 0
+        and expected_effective_batch % expected_micro_batch == 0,
+        "configured pretraining batch sizes are invalid",
+    )
+    expected_accumulation = expected_effective_batch // expected_micro_batch
     for index, record in enumerate(records, 1):
         prefix = f"metrics[{index}]"
         require(record.get("phase") == "pretraining", f"{prefix}.phase must be pretraining")
         require(record.get("epochs") == expected_epochs, f"{prefix}.epochs differs from config")
         require_finite_number(record.get("optimizer_steps"), f"{prefix}.optimizer_steps", positive=True)
         require_finite_number(record.get("samples_seen"), f"{prefix}.samples_seen", positive=True)
+        require(
+            record.get("effective_batch_size") == expected_effective_batch,
+            f"{prefix}.effective_batch_size differs from config",
+        )
+        require(
+            record.get("micro_batch_size") == expected_micro_batch,
+            f"{prefix}.micro_batch_size differs from config",
+        )
+        require(
+            record.get("gradient_accumulation_steps") == expected_accumulation,
+            f"{prefix}.gradient_accumulation_steps differs from config",
+        )
+        require(
+            record.get("micro_batches_processed")
+            == record["optimizer_steps"] * expected_accumulation,
+            f"{prefix}.micro_batches_processed is inconsistent",
+        )
+        require(
+            record["samples_seen"]
+            == record["optimizer_steps"] * expected_effective_batch,
+            f"{prefix}.samples_seen is inconsistent",
+        )
         for field in ("policy_loss", "value_loss", "total_loss"):
             require_finite_number(record.get(field), f"{prefix}.{field}")
         require_finite_number(record.get("mean_grad_norm"), f"{prefix}.mean_grad_norm", nonnegative=True)

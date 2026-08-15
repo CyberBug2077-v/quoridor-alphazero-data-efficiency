@@ -55,6 +55,7 @@ def minimal_network_args() -> dotdict:
             "dropout": 0.0,
             "epochs": 1,
             "batch_size": 2,
+            "micro_batch_size": 1,
             "num_channels": 8,
             "num_res_blocks": 1,
             "attn_depth": 0,

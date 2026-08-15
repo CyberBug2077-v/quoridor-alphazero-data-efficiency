@@ -89,6 +89,30 @@ def _require_positive_int(
     return value
 
 
+def _validate_batch_configuration(
+    training: dict[str, Any],
+    section_name: str,
+) -> None:
+    batch_size = _require_positive_int(
+        training, "batch_size", section_name
+    )
+    micro_batch_size = _require_positive_int(
+        training, "micro_batch_size", section_name
+    )
+
+    if micro_batch_size > batch_size:
+        raise ConfigError(
+            f"{section_name}.micro_batch_size must be <= "
+            f"{section_name}.batch_size"
+        )
+
+    if batch_size % micro_batch_size != 0:
+        raise ConfigError(
+            f"{section_name}.batch_size must be divisible by "
+            f"{section_name}.micro_batch_size"
+        )
+
+
 def _require_nonnegative_number(
     section: dict[str, Any], field: str, section_name: str, *, nullable: bool = False
 ) -> float | None:
@@ -234,7 +258,7 @@ def validate_pretraining_config(resolved: dict[str, Any]) -> None:
     _reject_unknown(run, "run", {"id", "seed", "device", "gpu_index", "deterministic", "output_dir"})
     _reject_unknown(model, "model", {"board_size", "num_channels", "num_res_blocks", "attn_depth", "num_heads", "se_enabled", "dropout"})
     _reject_unknown(data, "data", {"archive_path", "extracted_path", "expected_sha256", "validate_before_training"})
-    _reject_unknown(training, "pretraining", {"epochs", "batch_size", "learning_rate", "optimizer", "weight_decay", "gradient_clip", "amp", "amp_dtype"})
+    _reject_unknown(training, "pretraining", {"epochs", "batch_size", "micro_batch_size", "learning_rate", "optimizer", "weight_decay", "gradient_clip", "amp", "amp_dtype"})
     _reject_unknown(checkpoint, "checkpoint", {"directory", "checkpoint_0_filename", "best_filename", "save_rng_state", "compute_sha256"})
     _reject_unknown(logging, "logging", {"metrics_file", "metadata_file", "evaluation_file", "summary_file", "log_every_optimizer_steps"})
     _require_fields(data, "data", {"archive_path", "extracted_path", "expected_sha256", "validate_before_training"})
@@ -242,9 +266,9 @@ def validate_pretraining_config(resolved: dict[str, Any]) -> None:
     if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest.lower()):
         raise ConfigError("data.expected_sha256 must be a 64-character SHA-256 digest")
     _require_bool(data, "validate_before_training", "data")
-    _require_fields(training, "pretraining", {"epochs", "batch_size", "learning_rate", "optimizer", "weight_decay", "gradient_clip", "amp", "amp_dtype"})
+    _require_fields(training, "pretraining", {"epochs", "batch_size", "micro_batch_size", "learning_rate", "optimizer", "weight_decay", "gradient_clip", "amp", "amp_dtype"})
     _require_positive_int(training, "epochs", "pretraining")
-    _require_positive_int(training, "batch_size", "pretraining")
+    _validate_batch_configuration(training, "pretraining")
     _require_nonnegative_number(training, "learning_rate", "pretraining")
     if _require_string(training, "optimizer", "pretraining").lower() != "adamw":
         raise ConfigError("pretraining.optimizer must be adamw")
@@ -295,7 +319,7 @@ def validate_baseline_config(resolved: dict[str, Any]) -> None:
     _reject_unknown(model, "model", {"board_size", "num_channels", "num_res_blocks", "attn_depth", "num_heads", "se_enabled", "dropout"})
     _reject_unknown(budget, "budget", {"max_gpu_hours", "max_wall_clock_hours", "max_iterations"})
     _reject_unknown(self_play, "self_play", {"iterations", "games_per_iteration", "mcts_simulations", "eval_mcts_in_batch", "temperature_threshold", "cpuct", "dirichlet_noise", "dirichlet_alpha", "dirichlet_epsilon", "max_game_length"})
-    _reject_unknown(training, "training", {"epochs", "batch_size", "learning_rate", "optimizer", "weight_decay", "gradient_clip", "amp", "amp_dtype", "update_gating"})
+    _reject_unknown(training, "training", {"epochs", "batch_size", "micro_batch_size", "learning_rate", "optimizer", "weight_decay", "gradient_clip", "amp", "amp_dtype", "update_gating"})
     _reject_unknown(replay, "replay", {"max_queue_size", "max_train_samples", "history_iterations"})
     _reject_unknown(checkpoint, "checkpoint", {"directory", "save_every_iterations", "save_replay_state", "save_instrumentation_state", "save_rng_state", "compute_sha256"})
     _reject_unknown(instrumentation, "instrumentation", {"enabled", "tracker_file", "track_iteration_timing", "track_resource_usage", "persist_tracker_state", "verify_resume_continuity", "verify_evaluation_read_only", "measure_overhead"})
@@ -326,8 +350,8 @@ def validate_baseline_config(resolved: dict[str, Any]) -> None:
     for field in ("cpuct", "dirichlet_alpha", "dirichlet_epsilon"):
         _require_nonnegative_number(self_play, field, "self_play")
     _require_bool(self_play, "dirichlet_noise", "self_play")
-    for field in ("epochs", "batch_size"):
-        _require_positive_int(training, field, "training")
+    _require_positive_int(training, "epochs", "training")
+    _validate_batch_configuration(training, "training")
     for field in ("learning_rate", "weight_decay", "gradient_clip"):
         _require_nonnegative_number(training, field, "training")
     if _require_string(training, "optimizer", "training").lower() != "adamw":
@@ -384,6 +408,7 @@ def map_baseline_to_train_args(resolved: dict[str, Any]) -> dict[str, Any]:
     history = replay.get("history_iterations", training.get("replay_history_iterations"))
     update_gating = bool(training.get("update_gating", False))
     update_threshold = training.get("update_threshold", -0.51)
+    micro_batch_size = training.get("micro_batch_size", training["batch_size"])
     resolved_checkpoint_dir = checkpoint.get("_directory_path", checkpoint["directory"])
     checkpoint_dir = (
         resolved_checkpoint_dir.as_posix()
@@ -405,6 +430,7 @@ def map_baseline_to_train_args(resolved: dict[str, Any]) -> dict[str, Any]:
         "maxlenOfQueue": max_queue,
         "max_train_size": max_samples,
         "batch_size": training["batch_size"],
+        "micro_batch_size": micro_batch_size,
         "lr": training["learning_rate"],
         "checkpoint": checkpoint_dir,
         "save_every_n_iterations": checkpoint["save_every_iterations"],
@@ -428,6 +454,7 @@ def map_model_to_nn_args(resolved: dict[str, Any]) -> dict[str, Any]:
     training = resolved.get("training", resolved.get("pretraining", {}))
     model = resolved.get("model", training)
     run = resolved["run"]
+    micro_batch_size = training.get("micro_batch_size", training["batch_size"])
     return {
         "cuda": run.get("device", "cuda") == "cuda",
         "lr": training["learning_rate"],
@@ -436,6 +463,10 @@ def map_model_to_nn_args(resolved: dict[str, Any]) -> dict[str, Any]:
         "lr_decay_gamma": 1.0,
         "epochs": training["epochs"],
         "batch_size": training["batch_size"],
+        "micro_batch_size": micro_batch_size,
+        "gradient_accumulation_steps": (
+            training["batch_size"] // micro_batch_size
+        ),
         "num_channels": model["num_channels"],
         "num_res_blocks": model["num_res_blocks"],
         "attn_depth": model["attn_depth"],

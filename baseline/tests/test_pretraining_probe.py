@@ -59,7 +59,8 @@ def make_probe_config(
         },
         "pretraining": {
             "epochs": 10,
-            "batch_size": 2048,
+            "batch_size": 8,
+            "micro_batch_size": 4,
             "learning_rate": 0.0005,
             "optimizer": "adamw",
             "weight_decay": 0.0001,
@@ -94,9 +95,15 @@ def successful_probe_result() -> dict[str, Any]:
         "schema_version": 1,
         "status": "failed",
         "probe_only": True,
-        "requested_batch_size": 8,
-        "requested_steps": 1,
+        "configured_effective_batch_size": 8,
+        "configured_micro_batch_size": 4,
+        "requested_effective_batch_size": 8,
+        "requested_micro_batch_size": 4,
+        "gradient_accumulation_steps": 2,
+        "requested_optimizer_steps": 1,
         "optimizer_steps": 1,
+        "micro_batches_processed": 2,
+        "samples_seen": 8,
         "oom": False,
         "policy_loss": 2.0,
         "value_loss": 0.5,
@@ -107,7 +114,10 @@ def successful_probe_result() -> dict[str, Any]:
         "gpu_name": "synthetic GPU",
         "memory_margin": {"ok": True},
         "acceptance": {
+            "effective_batch_matches_config": True,
             "optimizer_steps_ok": True,
+            "micro_batch_count_ok": True,
+            "samples_seen_ok": True,
             "finite_metrics": True,
             "memory_margin_ok": True,
             "no_formal_checkpoint": False,
@@ -145,28 +155,40 @@ def invoke_probe(
     monkeypatch,
     config_path: Path,
     *,
-    batch_size: int = 8,
+    effective_batch_size: int | None = None,
+    micro_batch_size: int | None = None,
     steps: int = 1,
+    trial: int = 1,
 ) -> int:
+    argv = [
+        "probe_pretraining_batch.py",
+        "--config",
+        str(config_path),
+        "--steps",
+        str(steps),
+        "--trial",
+        str(trial),
+    ]
+    if effective_batch_size is not None:
+        argv.extend(["--effective-batch-size", str(effective_batch_size)])
+    if micro_batch_size is not None:
+        argv.extend(["--micro-batch-size", str(micro_batch_size)])
     monkeypatch.setattr(
         sys,
         "argv",
-        [
-            "probe_pretraining_batch.py",
-            "--config",
-            str(config_path),
-            "--batch-size",
-            str(batch_size),
-            "--steps",
-            str(steps),
-        ],
+        argv,
     )
     return probe_pretraining_batch.main()
 
 
 @pytest.mark.parametrize(
     ("argument", "value"),
-    [("--steps", "0"), ("--steps", "-1"), ("--batch-size", "0"), ("--batch-size", "-1")],
+    [
+        ("--steps", "0"),
+        ("--trial", "0"),
+        ("--effective-batch-size", "0"),
+        ("--micro-batch-size", "-1"),
+    ],
 )
 def test_probe_requires_positive_steps_and_batch_size(
     monkeypatch, argument: str, value: str
@@ -175,9 +197,13 @@ def test_probe_requires_positive_steps_and_batch_size(
         "probe_pretraining_batch.py",
         "--config",
         "unused.yaml",
-        "--batch-size",
+        "--effective-batch-size",
+        "1",
+        "--micro-batch-size",
         "1",
         "--steps",
+        "1",
+        "--trial",
         "1",
     ]
     argv[argv.index(argument) + 1] = value
@@ -238,14 +264,52 @@ def test_successful_probe_writes_json_without_mutating_inputs_or_checkpoint(
 
     assert invoke_probe(monkeypatch, config_path) == 0
 
-    output = tmp_path / "outputs" / "pretraining_probe" / "batch_8.json"
+    output = (
+        tmp_path
+        / "outputs"
+        / "pretraining_probe"
+        / "effective_8_micro_4_steps_1_trial_1.json"
+    )
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["status"] == "passed"
     assert payload["optimizer_steps"] == 1
+    assert payload["micro_batches_processed"] == 2
+    assert payload["samples_seen"] == 8
+    assert payload["requested_effective_batch_size"] == 8
+    assert payload["requested_micro_batch_size"] == 4
     assert payload["acceptance"]["passed"] is True
     assert payload["acceptance"]["no_formal_checkpoint"] is True
     assert sha256_file(config_path) == config_hash
     assert sha256_file(dataset) == dataset_hash
+    assert not any(tmp_path.rglob("checkpoint_0.pth.tar"))
+
+
+def test_probe_memory_margin_failure_writes_json_and_returns_two(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path, _ = make_probe_config(tmp_path)
+    patch_probe_runtime(monkeypatch, tmp_path)
+    failed_result = successful_probe_result()
+    failed_result["memory_margin"] = {"ok": False}
+    failed_result["acceptance"]["memory_margin_ok"] = False
+    monkeypatch.setattr(
+        probe_pretraining_batch,
+        "execute_probe",
+        lambda *args, **kwargs: failed_result,
+    )
+
+    assert invoke_probe(monkeypatch, config_path) == 2
+
+    output = (
+        tmp_path
+        / "outputs"
+        / "pretraining_probe"
+        / "effective_8_micro_4_steps_1_trial_1.json"
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["acceptance"]["memory_margin_ok"] is False
+    assert payload["acceptance"]["passed"] is False
     assert not any(tmp_path.rglob("checkpoint_0.pth.tar"))
 
 
@@ -272,6 +336,17 @@ def test_probe_batch_selection_and_memory_margin_are_deterministic() -> None:
     )["ok"] is False
 
 
+@pytest.mark.parametrize(
+    ("effective", "micro", "message"),
+    [(1024, 2048, "must be <="), (2048, 1500, "must be divisible")],
+)
+def test_probe_rejects_invalid_accumulation_configuration(
+    effective: int, micro: int, message: str
+) -> None:
+    with pytest.raises(probe_pretraining_batch.ConfigError, match=message):
+        probe_pretraining_batch.validate_requested_batches(effective, micro)
+
+
 @pytest.mark.gpu
 @pytest.mark.slow
 @pytest.mark.integration
@@ -286,9 +361,13 @@ def test_formal_scale_gpu_probe() -> None:
         str(BASELINE_ROOT / "scripts" / "probe_pretraining_batch.py"),
         "--config",
         str(config_path),
-        "--batch-size",
+        "--effective-batch-size",
         "2048",
+        "--micro-batch-size",
+        "1024",
         "--steps",
+        "20",
+        "--trial",
         "1",
     ]
     completed = subprocess.run(
@@ -298,11 +377,18 @@ def test_formal_scale_gpu_probe() -> None:
         capture_output=True,
         text=True,
     )
-    report_path = BASELINE_ROOT / "outputs" / "pretraining_probe" / "batch_2048.json"
+    report_path = (
+        BASELINE_ROOT
+        / "outputs"
+        / "pretraining_probe"
+        / "effective_2048_micro_1024_steps_20_trial_1.json"
+    )
     assert completed.returncode in {0, 2}
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["optimizer_steps"] in {0, 1}
+    assert report["optimizer_steps"] in {0, 20}
     if not report["oom"]:
-        assert report["optimizer_steps"] == 1
+        assert report["optimizer_steps"] == 20
+        assert report["micro_batches_processed"] == 40
+        assert report["samples_seen"] == 40960
         for field in ("policy_loss", "value_loss", "total_loss", "gradient_norm"):
             assert math.isfinite(report[field])

@@ -35,13 +35,19 @@ MINIMUM_FREE_FRACTION = 0.10
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--batch-size", type=int, required=True)
+    parser.add_argument("--effective-batch-size", type=int)
+    parser.add_argument("--micro-batch-size", type=int)
     parser.add_argument("--steps", type=int, default=1)
+    parser.add_argument("--trial", type=int, default=1)
     args = parser.parse_args()
-    if args.batch_size < 1:
-        parser.error("--batch-size must be >= 1")
+    if args.effective_batch_size is not None and args.effective_batch_size < 1:
+        parser.error("--effective-batch-size must be >= 1")
+    if args.micro_batch_size is not None and args.micro_batch_size < 1:
+        parser.error("--micro-batch-size must be >= 1")
     if args.steps < 1:
         parser.error("--steps must be >= 1")
+    if args.trial < 1:
+        parser.error("--trial must be >= 1")
     return args
 
 
@@ -96,6 +102,21 @@ def validate_formal_model(resolved: dict[str, Any]) -> None:
         )
 
 
+def validate_requested_batches(
+    effective_batch_size: int,
+    micro_batch_size: int,
+) -> int:
+    if effective_batch_size < 1:
+        raise ConfigError("effective batch size must be >= 1")
+    if micro_batch_size < 1:
+        raise ConfigError("micro batch size must be >= 1")
+    if micro_batch_size > effective_batch_size:
+        raise ConfigError("micro batch size must be <= effective batch size")
+    if effective_batch_size % micro_batch_size != 0:
+        raise ConfigError("effective batch size must be divisible by micro batch size")
+    return effective_batch_size // micro_batch_size
+
+
 def fixed_batch(
     examples: list | tuple,
     *,
@@ -135,12 +156,17 @@ def execute_probe(
     resolved: dict[str, Any],
     examples: list | tuple,
     *,
-    batch_size: int,
+    effective_batch_size: int,
+    micro_batch_size: int,
     steps: int,
+    trial: int,
 ) -> dict[str, Any]:
     seed = int(resolved["run"]["seed"])
+    accumulation_steps = validate_requested_batches(
+        effective_batch_size, micro_batch_size
+    )
     batch, sample_index_sha256 = fixed_batch(
-        examples, batch_size=batch_size, seed=seed
+        examples, batch_size=effective_batch_size, seed=seed
     )
     _, network = create_network(resolved)
     device = torch.device("cuda", int(resolved["run"]["gpu_index"]))
@@ -151,10 +177,16 @@ def execute_probe(
         "status": "failed",
         "probe_only": True,
         "run_id": resolved["run"]["id"],
-        "requested_batch_size": batch_size,
-        "configured_batch_size": resolved["pretraining"]["batch_size"],
-        "requested_steps": steps,
+        "trial": trial,
+        "configured_effective_batch_size": resolved["pretraining"]["batch_size"],
+        "configured_micro_batch_size": resolved["pretraining"]["micro_batch_size"],
+        "requested_effective_batch_size": effective_batch_size,
+        "requested_micro_batch_size": micro_batch_size,
+        "gradient_accumulation_steps": accumulation_steps,
+        "requested_optimizer_steps": steps,
         "optimizer_steps": 0,
+        "micro_batches_processed": 0,
+        "samples_seen": 0,
         "sample_index_sha256": sample_index_sha256,
         "gpu_name": properties.name,
         "gpu_total_memory_bytes": total_memory,
@@ -172,7 +204,10 @@ def execute_probe(
         "gpu_free_memory_after_bytes": None,
         "memory_margin": None,
         "acceptance": {
+            "effective_batch_matches_config": False,
             "optimizer_steps_ok": False,
+            "micro_batch_count_ok": False,
+            "samples_seen_ok": False,
             "finite_metrics": False,
             "memory_margin_ok": False,
             "no_formal_checkpoint": False,
@@ -185,7 +220,6 @@ def execute_probe(
         weight_decay=resolved["pretraining"]["weight_decay"],
     )
     try:
-        boards, policies, values, valids = batch_tensors(batch, device)
         network.nnet.train()
         torch.cuda.synchronize(device)
         result["gpu_free_memory_before_bytes"] = int(torch.cuda.mem_get_info(device)[0])
@@ -197,35 +231,68 @@ def execute_probe(
         gradient_norm_sum = 0.0
         for _ in range(steps):
             optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast(
-                device_type="cuda",
-                enabled=resolved["pretraining"]["amp"],
-                dtype=(
-                    torch.bfloat16
-                    if resolved["pretraining"]["amp_dtype"] == "bf16"
-                    else torch.float16
-                ),
+            step_policy_loss = 0.0
+            step_value_loss = 0.0
+            step_total_loss = 0.0
+            for micro_index in range(accumulation_steps):
+                start = micro_index * micro_batch_size
+                stop = start + micro_batch_size
+                boards, policies, values, valids = batch_tensors(
+                    batch[start:stop], device
+                )
+                with torch.amp.autocast(
+                    device_type="cuda",
+                    enabled=resolved["pretraining"]["amp"],
+                    dtype=(
+                        torch.bfloat16
+                        if resolved["pretraining"]["amp_dtype"] == "bf16"
+                        else torch.float16
+                    ),
+                ):
+                    logits, predicted_values = network.nnet(boards, logits=True)
+                    masked_logits = logits.masked_fill(valids == 0, float("-inf"))
+                    probabilities = torch.softmax(masked_logits, dim=1)
+                    policy_loss = network.loss_pi(policies, probabilities)
+                    value_loss = network.loss_v(values, predicted_values)
+                    total_loss = policy_loss + value_loss
+                    backward_loss = total_loss / accumulation_steps
+                if not torch.isfinite(total_loss):
+                    raise RuntimeError("probe produced a non-finite loss")
+                if (
+                    resolved["pretraining"]["amp"]
+                    and resolved["pretraining"]["amp_dtype"] == "fp16"
+                ):
+                    network.scaler.scale(backward_loss).backward()
+                else:
+                    backward_loss.backward()
+                result["micro_batches_processed"] += 1
+                step_policy_loss += float(policy_loss.detach()) / accumulation_steps
+                step_value_loss += float(value_loss.detach()) / accumulation_steps
+                step_total_loss += float(total_loss.detach()) / accumulation_steps
+            if (
+                resolved["pretraining"]["amp"]
+                and resolved["pretraining"]["amp_dtype"] == "fp16"
             ):
-                logits, predicted_values = network.nnet(boards, logits=True)
-                masked_logits = logits.masked_fill(valids == 0, float("-inf"))
-                probabilities = torch.softmax(masked_logits, dim=1)
-                policy_loss = network.loss_pi(policies, probabilities)
-                value_loss = network.loss_v(values, predicted_values)
-                total_loss = policy_loss + value_loss
-            if not torch.isfinite(total_loss):
-                raise RuntimeError("probe produced a non-finite loss")
-            total_loss.backward()
+                network.scaler.unscale_(optimizer)
             gradient_norm = torch.nn.utils.clip_grad_norm_(
                 network.nnet.parameters(),
                 resolved["pretraining"]["gradient_clip"],
             )
             if not torch.isfinite(gradient_norm):
                 raise RuntimeError("probe produced a non-finite gradient norm")
-            optimizer.step()
+            if (
+                resolved["pretraining"]["amp"]
+                and resolved["pretraining"]["amp_dtype"] == "fp16"
+            ):
+                network.scaler.step(optimizer)
+                network.scaler.update()
+            else:
+                optimizer.step()
             result["optimizer_steps"] += 1
-            policy_loss_sum += float(policy_loss.detach())
-            value_loss_sum += float(value_loss.detach())
-            total_loss_sum += float(total_loss.detach())
+            result["samples_seen"] += effective_batch_size
+            policy_loss_sum += step_policy_loss
+            value_loss_sum += step_value_loss
+            total_loss_sum += step_total_loss
             gradient_norm_sum += float(gradient_norm.detach())
         torch.cuda.synchronize(device)
         elapsed = time.perf_counter() - started
@@ -285,7 +352,17 @@ def execute_probe(
     )
     result["acceptance"].update(
         {
+            "effective_batch_matches_config": (
+                effective_batch_size == resolved["pretraining"]["batch_size"]
+            ),
             "optimizer_steps_ok": result["optimizer_steps"] == steps,
+            "micro_batch_count_ok": (
+                result["micro_batches_processed"]
+                == steps * accumulation_steps
+            ),
+            "samples_seen_ok": (
+                result["samples_seen"] == steps * effective_batch_size
+            ),
             "finite_metrics": finite_values,
             "memory_margin_ok": bool(result["memory_margin"] and result["memory_margin"]["ok"]),
         }
@@ -295,16 +372,28 @@ def execute_probe(
 
 def main() -> int:
     args = parse_args()
-    output_path = (
-        BASELINE_ROOT
-        / "outputs"
-        / "pretraining_probe"
-        / f"batch_{args.batch_size}.json"
-    )
     try:
         resolved = resolve_pretraining_config(load_yaml(args.config), args.config)
         require_inside_baseline(resolved)
         validate_formal_model(resolved)
+        effective_batch_size = (
+            args.effective_batch_size
+            or resolved["pretraining"]["batch_size"]
+        )
+        micro_batch_size = (
+            args.micro_batch_size
+            or resolved["pretraining"]["micro_batch_size"]
+        )
+        validate_requested_batches(effective_batch_size, micro_batch_size)
+        output_path = (
+            BASELINE_ROOT
+            / "outputs"
+            / "pretraining_probe"
+            / (
+                f"effective_{effective_batch_size}_micro_{micro_batch_size}_"
+                f"steps_{args.steps}_trial_{args.trial}.json"
+            )
+        )
         if output_path.is_relative_to(resolved["_output_path"]):
             raise ConfigError("probe output must not be inside the formal pretraining output")
         formal_before = tree_snapshot(resolved["_output_path"])
@@ -316,8 +405,10 @@ def main() -> int:
         result = execute_probe(
             resolved,
             examples,
-            batch_size=args.batch_size,
+            effective_batch_size=effective_batch_size,
+            micro_batch_size=micro_batch_size,
             steps=args.steps,
+            trial=args.trial,
         )
         formal_unchanged = tree_snapshot(resolved["_output_path"]) == formal_before
         data_unchanged = (
@@ -327,7 +418,10 @@ def main() -> int:
         no_formal_checkpoint = formal_unchanged and data_unchanged
         result["acceptance"]["no_formal_checkpoint"] = no_formal_checkpoint
         result["acceptance"]["passed"] = (
-            result["acceptance"]["optimizer_steps_ok"]
+            result["acceptance"]["effective_batch_matches_config"]
+            and result["acceptance"]["optimizer_steps_ok"]
+            and result["acceptance"]["micro_batch_count_ok"]
+            and result["acceptance"]["samples_seen_ok"]
             and result["acceptance"]["finite_metrics"]
             and result["acceptance"]["memory_margin_ok"]
             and no_formal_checkpoint

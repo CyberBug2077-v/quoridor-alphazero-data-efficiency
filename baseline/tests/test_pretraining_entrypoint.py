@@ -40,6 +40,10 @@ def successful_metrics() -> dict[str, Any]:
         "samples_seen": 2,
         "training_batches": 1,
         "optimizer_steps": 1,
+        "effective_batch_size": 2,
+        "micro_batch_size": 1,
+        "gradient_accumulation_steps": 2,
+        "micro_batches_processed": 2,
         "policy_loss": 2.0,
         "value_loss": 0.5,
         "total_loss": 2.5,
@@ -93,6 +97,7 @@ def make_pretraining_config(tmp_path: Path, run_id: str) -> tuple[Path, Path]:
         "pretraining": {
             "epochs": 1,
             "batch_size": 2,
+            "micro_batch_size": 1,
             "learning_rate": 0.0005,
             "optimizer": "adamw",
             "weight_decay": 0.0001,
@@ -216,6 +221,10 @@ def test_fresh_entrypoint_creates_complete_artifact_lifecycle(
     assert resolved["mode"] == "pretraining"
     assert metadata["run_type"] == "pretraining"
     assert metrics["optimizer_steps"] == 1
+    assert metrics["effective_batch_size"] == 2
+    assert metrics["micro_batch_size"] == 1
+    assert metrics["gradient_accumulation_steps"] == 2
+    assert metrics["micro_batches_processed"] == 2
     assert summary["status"] == "completed"
     assert sha256_file(checkpoint) == sha256_file(best)
     assert summary["checkpoint_0_sha256"] == summary["best_sha256"]

@@ -189,6 +189,18 @@ def verify_baseline(run_dir: Path) -> dict[str, Any]:
     require(isinstance(expected_iterations, int) and expected_iterations > 0, "expected iterations are unresolved")
     require(len(metrics) == expected_iterations, "completed iterations differ from resolved config")
     games_per_iteration = int(resolved["self_play"]["games_per_iteration"])
+    training = resolved.get("training", {})
+    effective_batch_size = training.get("batch_size")
+    micro_batch_size = training.get("micro_batch_size")
+    require(
+        isinstance(effective_batch_size, int)
+        and effective_batch_size > 0
+        and isinstance(micro_batch_size, int)
+        and micro_batch_size > 0
+        and effective_batch_size % micro_batch_size == 0,
+        "resolved baseline batch configuration is invalid",
+    )
+    accumulation_steps = effective_batch_size // micro_batch_size
     checkpoint_frequency = resolved["checkpoint"]["save_every_iterations"]
     require(isinstance(checkpoint_frequency, int) and checkpoint_frequency > 0, "checkpoint frequency is unresolved")
     required_checkpoint_iterations = set(range(checkpoint_frequency, expected_iterations + 1, checkpoint_frequency))
@@ -198,6 +210,11 @@ def verify_baseline(run_dir: Path) -> dict[str, Any]:
         iteration = int(record["iteration"])
         require(record.get("games_completed") == games_per_iteration, f"wrong game count at iteration {iteration}")
         require(record.get("optimizer_steps", 0) > 0, f"invalid optimizer steps at iteration {iteration}")
+        require(record.get("effective_batch_size") == effective_batch_size, f"effective batch mismatch at iteration {iteration}")
+        require(record.get("micro_batch_size") == micro_batch_size, f"micro batch mismatch at iteration {iteration}")
+        require(record.get("gradient_accumulation_steps") == accumulation_steps, f"accumulation mismatch at iteration {iteration}")
+        require(record.get("micro_batches_processed") == record["optimizer_steps"] * accumulation_steps, f"micro-batch count mismatch at iteration {iteration}")
+        require(record.get("samples_seen") == record["optimizer_steps"] * effective_batch_size, f"sample count mismatch at iteration {iteration}")
         require(record.get("illegal_action_count") == 0, f"illegal actions at iteration {iteration}")
         checkpoint_value = record.get("checkpoint_path")
         if checkpoint_value is not None:

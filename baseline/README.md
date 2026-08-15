@@ -66,7 +66,7 @@ formal model and dataset, then validate the full configuration, run fresh
 pretraining, and finally verify the frozen result:
 
 ```bash
-python scripts/probe_pretraining_batch.py --config configs/pretraining_reproduction.yaml --batch-size 2048 --steps 1
+python scripts/probe_pretraining_batch.py --config configs/pretraining_reproduction.yaml --effective-batch-size 2048 --micro-batch-size 1024 --steps 20 --trial 1
 python scripts/run_pretraining.py dry-run --config configs/pretraining_reproduction.yaml
 python scripts/run_pretraining.py fresh --config configs/pretraining_reproduction.yaml
 python scripts/verify_pretraining.py --run-dir outputs/pretraining_reproduction_seed1001
@@ -81,11 +81,17 @@ GPU memory. OOM, other runtime failures, or insufficient margin return status
 2 while still preserving a diagnostic JSON whenever execution reaches the
 probe result stage.
 
-On the current RTX 4070 Laptop GPU, batch 2048 completed one optimizer step
-without OOM, but peak reserved memory left only 903.5 MiB. It therefore failed
-the conservative margin check. Do not start formal pretraining from that result
-alone; first approve a smaller physical batch or gradient accumulation that
-preserves the intended effective batch.
+`batch_size` is the effective optimizer batch, while `micro_batch_size` is the
+number of samples placed on the GPU for one forward/backward pass. Both formal
+pretraining and baseline training retain effective batch 2048, use micro-batch
+1024, and therefore perform two backward passes followed by one gradient clip
+and optimizer step. The effective batch must be divisible by the micro-batch.
+
+The 20-step trial on the current RTX 4070 Laptop GPU passed: 20 optimizer
+steps, 40 micro-batches, and 40,960 samples were recorded; peak reserved memory
+was 3,846 MiB and the conservative remaining margin was 3,172 MiB (38.7%). The
+result is stored as
+`outputs/pretraining_probe/effective_2048_micro_1024_steps_20_trial_1.json`.
 
 `run_pretraining.py` supports only `dry-run` and `fresh`. It does not resume,
 self-play, evaluate opponents, or create replay state. `fresh` refuses any

@@ -77,7 +77,47 @@ def test_single_optimizer_step(
     assert metrics["mean_grad_norm"] > 0
     assert metrics["optimizer_steps"] == 1
     assert metrics["training_batches"] == 1
+    assert metrics["effective_batch_size"] == 2
+    assert metrics["micro_batch_size"] == 1
+    assert metrics["gradient_accumulation_steps"] == 2
+    assert metrics["micro_batches_processed"] == 2
+    assert metrics["samples_seen"] == 2
     assert any(
         not torch.equal(parameters_before[name], parameter.detach())
         for name, parameter in cuda_network.nnet.named_parameters()
     )
+
+
+def test_gradient_accumulation_uses_one_optimizer_step(
+    cuda_network: NNetWrapper,
+    training_examples: list[tuple],
+) -> None:
+    cuda_network.net_args["batch_size"] = 4
+    cuda_network.net_args["micro_batch_size"] = 2
+    cuda_network.net_args["gradient_accumulation_steps"] = 2
+    parameters_before = {
+        name: parameter.detach().clone()
+        for name, parameter in cuda_network.nnet.named_parameters()
+    }
+
+    deterministic_was_enabled = torch.are_deterministic_algorithms_enabled()
+    torch.use_deterministic_algorithms(False)
+    try:
+        metrics = cuda_network.train(
+            training_examples,
+            print_summary=False,
+            available_examples=len(training_examples),
+        )
+    finally:
+        torch.use_deterministic_algorithms(deterministic_was_enabled, warn_only=True)
+
+    parameters_changed = any(
+        not torch.equal(parameters_before[name], parameter.detach())
+        for name, parameter in cuda_network.nnet.named_parameters()
+    )
+    assert metrics["optimizer_steps"] == 1
+    assert metrics["micro_batches_processed"] == 2
+    assert metrics["samples_seen"] == 4
+    assert metrics["effective_batch_size"] == 4
+    assert metrics["micro_batch_size"] == 2
+    assert parameters_changed
