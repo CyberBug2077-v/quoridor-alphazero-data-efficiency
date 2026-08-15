@@ -220,6 +220,7 @@ def test_fresh_entrypoint_creates_complete_artifact_lifecycle(
     best = output_dir / "checkpoints" / "best.pth.tar"
     assert resolved["mode"] == "pretraining"
     assert metadata["run_type"] == "pretraining"
+    assert metadata["input_hashes"]["pretraining_dataset"]
     assert metrics["optimizer_steps"] == 1
     assert metrics["effective_batch_size"] == 2
     assert metrics["micro_batch_size"] == 1
@@ -227,6 +228,8 @@ def test_fresh_entrypoint_creates_complete_artifact_lifecycle(
     assert metrics["micro_batches_processed"] == 2
     assert summary["status"] == "completed"
     assert sha256_file(checkpoint) == sha256_file(best)
+    assert metadata["output_hashes"]["checkpoint_0"] == sha256_file(checkpoint)
+    assert metadata["output_hashes"]["best"] == sha256_file(best)
     assert summary["checkpoint_0_sha256"] == summary["best_sha256"]
     assert not any(path.name.endswith(".tmp") for path in output_dir.rglob("*"))
 

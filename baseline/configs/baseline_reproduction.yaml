@@ -11,7 +11,7 @@ run:
 initialization:
   mode: pretrained_checkpoint
   checkpoint_path: outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
-  expected_sha256: null
+  expected_sha256: 4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667
   load_weights: true
   load_replay: false
   load_optimizer_state: false

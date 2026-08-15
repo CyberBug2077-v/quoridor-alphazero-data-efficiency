@@ -352,6 +352,16 @@ def verify_pretraining(run_dir: Path) -> dict[str, Any]:
     checkpoint_hash = sha256_file(checkpoint_0)
     best_hash = sha256_file(best)
     require(checkpoint_hash == best_hash, "checkpoint_0 and best SHA-256 differ")
+    output_hashes = metadata.get("output_hashes")
+    require(isinstance(output_hashes, dict), "checkpoint hashes are missing from metadata")
+    require(
+        output_hashes.get("checkpoint_0") == checkpoint_hash,
+        "metadata checkpoint_0 SHA-256 differs from actual file",
+    )
+    require(
+        output_hashes.get("best") == best_hash,
+        "metadata best SHA-256 differs from actual file",
+    )
     require(
         summary.get("checkpoint_0_sha256") == checkpoint_hash,
         "summary checkpoint_0 SHA-256 differs from actual file",

@@ -286,8 +286,9 @@ def main() -> int:
         output_dir.mkdir(parents=True, exist_ok=True)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_yaml(output_dir / "resolved_config.yaml", printable)
+        metadata_path = output_dir / resolved["logging"]["metadata_file"]
         write_run_metadata(
-            output_dir / resolved["logging"]["metadata_file"],
+            metadata_path,
             project_root=SOURCE_ROOT,
             resolved_config=printable,
             input_hashes={"pretraining_dataset": resolved["data"]["expected_sha256"]},
@@ -328,6 +329,12 @@ def main() -> int:
             best_hash = save_best_copy(saved["path"], best_path)
             if best_hash != saved["sha256"]:
                 raise RuntimeError("best.pth.tar differs from checkpoint_0.pth.tar")
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["output_hashes"] = {
+                "checkpoint_0": saved["sha256"],
+                "best": best_hash,
+            }
+            atomic_write_json(metadata_path, metadata)
             summary = {
                 "schema_version": 1,
                 "status": "completed",

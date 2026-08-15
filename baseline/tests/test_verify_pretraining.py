@@ -104,6 +104,10 @@ def pretraining_artifacts(tmp_path: Path, monkeypatch) -> Path:
                 ],
             },
             "input_hashes": {"pretraining_dataset": dataset_hash},
+            "output_hashes": {
+                "checkpoint_0": checkpoint_hash,
+                "best": checkpoint_hash,
+            },
             "resolved_config": resolved,
         },
     )
@@ -246,6 +250,10 @@ def test_state_dict_shape_mismatch_fails(pretraining_artifacts: Path) -> None:
     summary["checkpoint_0_sha256"] = digest
     summary["best_sha256"] = digest
     atomic_write_json(pretraining_artifacts / "summary.json", summary)
+    metadata_path = pretraining_artifacts / "run_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["output_hashes"] = {"checkpoint_0": digest, "best": digest}
+    atomic_write_json(metadata_path, metadata)
 
     with pytest.raises(
         verify_pretraining.VerificationError,

@@ -86,7 +86,12 @@ def test_pilot_and_baseline_share_one_fresh_initialization() -> None:
     assert pilot["initialization"] == baseline["initialization"]
     initialization = pilot["initialization"]
     assert initialization["mode"] == "pretrained_checkpoint"
-    assert initialization["checkpoint_path"].endswith("/checkpoint_0.pth.tar")
+    assert initialization["checkpoint_path"] == (
+        "outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar"
+    )
+    assert initialization["expected_sha256"] == (
+        "4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667"
+    )
     assert initialization["load_weights"] is True
     assert initialization["load_replay"] is False
     assert initialization["load_optimizer_state"] is False
