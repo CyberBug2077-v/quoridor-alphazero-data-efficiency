@@ -95,6 +95,25 @@ def test_save_frequency_creates_four_numbered_checkpoints(
     ]
 
 
+def test_invocation_boundary_is_checkpointed_between_cadence(
+    game: QuoridorGame,
+    cuda_network: NNetWrapper,
+    training_examples: list[tuple],
+    temporary_output_dir: Path,
+) -> None:
+    checkpoint_dir = temporary_output_dir / "boundary-checkpoints"
+    args = checkpoint_args(checkpoint_dir, 2)
+    args.save_every_n_iterations = 10
+    coach = Coach(game, cuda_network, args)
+    coach.executeEpisode = lambda: training_examples[:2]
+
+    coach.learn()
+
+    assert sorted(path.name for path in checkpoint_dir.glob("checkpoint_*.pth.tar")) == [
+        "checkpoint_2.pth.tar"
+    ]
+
+
 def test_resume_from_iteration_two_preserves_history_weights_and_old_files(
     game: QuoridorGame,
     cuda_network: NNetWrapper,

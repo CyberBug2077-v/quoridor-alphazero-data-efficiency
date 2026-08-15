@@ -481,11 +481,31 @@ class Coach():
                 accepted_model = True
 
             # Save numbered checkpoints at the configured interval.
-            should_save = (i % self.save_every_n_iterations == 0)
+            # Always persist the invocation boundary so a deliberate
+            # --stop-after-iteration can be resumed even when it falls between
+            # the normal checkpoint cadence.
+            should_save = (
+                i % self.save_every_n_iterations == 0
+                or i == self.args.numIters
+            )
 
             if should_save:
                 checkpoint_name = f"checkpoint_{i}.pth.tar"
-                self.nnet.save_checkpoint(folder=self.args.checkpoint, filename=checkpoint_name)
+                temporary_checkpoint_name = checkpoint_name + ".tmp"
+                self.nnet.save_checkpoint(
+                    folder=self.args.checkpoint,
+                    filename=temporary_checkpoint_name,
+                )
+                temporary_checkpoint_path = os.path.join(
+                    self.args.checkpoint, temporary_checkpoint_name
+                )
+                with open(temporary_checkpoint_path, 'rb+') as checkpoint_file:
+                    checkpoint_file.flush()
+                    os.fsync(checkpoint_file.fileno())
+                os.replace(
+                    temporary_checkpoint_path,
+                    os.path.join(self.args.checkpoint, checkpoint_name),
+                )
                 checkpoint_path = os.path.join(
                     self.args.checkpoint,
                     checkpoint_name,
@@ -536,9 +556,20 @@ class Coach():
             # Update the mutable pointer only after checkpoint, examples, and
             # metrics have committed the iteration boundary.
             if accepted_model:
+                temporary_best = 'best.pth.tar.tmp'
                 self.nnet.save_checkpoint(
                     folder=self.args.checkpoint,
-                    filename='best.pth.tar',
+                    filename=temporary_best,
+                )
+                temporary_best_path = os.path.join(
+                    self.args.checkpoint, temporary_best
+                )
+                with open(temporary_best_path, 'rb+') as best_file:
+                    best_file.flush()
+                    os.fsync(best_file.fileno())
+                os.replace(
+                    temporary_best_path,
+                    os.path.join(self.args.checkpoint, 'best.pth.tar'),
                 )
 
     def getCheckpointFile(self, iteration):

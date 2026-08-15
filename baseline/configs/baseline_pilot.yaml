@@ -1,13 +1,13 @@
 run:
-  id: baseline_reproduction_seed1001
+  id: baseline_pilot_seed1001
   seed: 1001
   device: cuda
   gpu_index: 0
   deterministic: false
-  output_dir: outputs/baseline_reproduction_seed1001
+  output_dir: outputs/baseline_pilot_seed1001
 
-# Baseline and Adaptive must point to this exact pretrained snapshot. This is
-# initialization of a fresh online replay, not restoration of an online run.
+# This is weight initialization for a new online run, never a resume. No
+# pretraining examples, replay, optimizer, or tracker state may be restored.
 initialization:
   mode: pretrained_checkpoint
   checkpoint_path: outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
@@ -27,15 +27,12 @@ model:
   se_enabled: false
   dropout: 0.3
 
-# Fill these three fields only after the 1-2 hour benchmark. max_iterations is
-# a safety ceiling, not a request to alter any algorithmic setting.
 budget:
-  max_gpu_hours: null
-  max_wall_clock_hours: null
-  max_iterations: null
+  # Launch fresh with CLI stop-after=5, then resume the same run to this target.
+  max_iterations: 7
 
 self_play:
-  iterations: null
+  iterations: 7
   games_per_iteration: 75
   mcts_simulations: 200
   eval_mcts_in_batch: 4
@@ -57,15 +54,14 @@ training:
   amp_dtype: bf16
   update_gating: false
 
-# Pure self-play only: there is deliberately no expert-data/top-up field.
 replay:
   max_queue_size: 500000
   max_train_samples: 200000
   history_iterations: 150
 
 checkpoint:
-  directory: outputs/baseline_reproduction_seed1001/checkpoints
-  save_every_iterations: null
+  directory: outputs/baseline_pilot_seed1001/checkpoints
+  save_every_iterations: 1
   save_replay_state: true
   save_instrumentation_state: true
   save_rng_state: true
@@ -89,8 +85,8 @@ logging:
 
 evaluation:
   enabled: true
-  evaluate_every_iterations: null
-  games_per_opponent: null
+  evaluate_every_iterations: 1
+  games_per_opponent: 2
   opponents:
     - random
     - greedy

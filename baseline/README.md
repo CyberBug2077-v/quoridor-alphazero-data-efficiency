@@ -48,6 +48,32 @@ Legacy entry points and shell launchers are retained only as references until
 their required behaviour has been extracted into the new configuration-driven
 scripts. They are not authoritative experiment launchers.
 
+## Formal reproduction entry points
+
+Validate and run supervised pretraining:
+
+```bash
+python scripts/run_pretraining.py dry-run --config configs/pretraining_reproduction.yaml
+python scripts/run_pretraining.py fresh --config configs/pretraining_reproduction.yaml
+```
+
+After copying the resulting `checkpoint_0_sha256` from the pretraining summary
+into `initialization.expected_sha256`, validate or launch the fixed-games
+baseline:
+
+```bash
+python scripts/run_baseline.py dry-run --config configs/baseline_pilot.yaml
+python scripts/run_baseline.py fresh --config configs/baseline_pilot.yaml --stop-after-iteration 5
+python scripts/run_baseline.py resume --run-dir outputs/baseline_pilot_seed1001
+python scripts/run_baseline.py evaluate-only --run-dir outputs/baseline_pilot_seed1001
+python scripts/verify_baseline.py --run-dir outputs/baseline_pilot_seed1001
+```
+
+`fresh` initializes only model weights from the frozen pretrained checkpoint
+and always creates an empty online replay. `resume` restores a numbered model
+checkpoint, replay history, RNG state, cumulative GPU-hours, and the reserved
+instrumentation state from the same run.
+
 ## Environment
 
 The current Windows development environment uses a Conda environment named

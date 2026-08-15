@@ -38,9 +38,7 @@ node_modules/
 *.examples
 
 # Large local datasets and archives
-baseline/data/**/*.zip
-baseline/data/**/*.tar
-baseline/data/**/*.tar.gz
+baseline/data/
 
 # Generated experiment output
 baseline/outputs/

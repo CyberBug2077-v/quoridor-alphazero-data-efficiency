@@ -20,6 +20,21 @@ import numpy as np
 import torch
 import yaml
 
+from runtime.artifacts import (
+    JsonlWriter as MetricsJsonlWriter,
+    atomic_write_yaml,
+    find_existing_run_artifacts as find_formal_artifacts,
+    write_summary,
+)
+from runtime.checkpointing import load_model_checkpoint
+from runtime.config import (
+    ConfigError,
+    load_yaml,
+    map_baseline_to_train_args,
+    map_model_to_nn_args,
+    merge_defaults,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "smoke_gpu.yaml"
@@ -81,10 +96,6 @@ REQUIRED_FIELDS = {
     "checkpoint": set(),
     "evaluation": set(),
 }
-
-
-class ConfigError(ValueError):
-    """Raised when the smoke-test configuration is invalid."""
 
 
 def parse_args() -> argparse.Namespace:
@@ -164,37 +175,8 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def merge_defaults(defaults: dict[str, Any], supplied: dict[str, Any]) -> dict[str, Any]:
-    resolved = copy.deepcopy(defaults)
-    for section, values in supplied.items():
-        if section not in resolved:
-            raise ConfigError(f"unknown top-level section: {section}")
-        if not isinstance(values, dict):
-            raise ConfigError(f"{section} must be a mapping")
-
-        allowed_fields = set(resolved[section]) | REQUIRED_FIELDS[section]
-        unknown = sorted(set(values) - allowed_fields)
-        if unknown:
-            raise ConfigError(
-                f"unknown field(s) in {section}: {', '.join(unknown)}"
-            )
-        resolved[section].update(values)
-    return resolved
-
-
 def load_config(path: Path) -> dict[str, Any]:
-    config_path = path.expanduser().resolve()
-    if not config_path.is_file():
-        raise ConfigError(f"configuration file not found: {config_path}")
-
-    try:
-        with config_path.open("r", encoding="utf-8") as config_file:
-            loaded = yaml.safe_load(config_file)
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"invalid YAML in {config_path}: {exc}") from exc
-
-    if not isinstance(loaded, dict):
-        raise ConfigError("the YAML document must contain a top-level mapping")
+    loaded = load_yaml(path)
 
     missing_sections = sorted(set(REQUIRED_FIELDS) - set(loaded))
     if missing_sections:
@@ -206,6 +188,12 @@ def load_config(path: Path) -> dict[str, Any]:
         section_value = loaded.get(section)
         if not isinstance(section_value, dict):
             raise ConfigError(f"{section} must be a mapping")
+        allowed_fields = set(DEFAULTS[section]) | required_fields
+        unknown = sorted(set(section_value) - allowed_fields)
+        if unknown:
+            raise ConfigError(
+                f"unknown field(s) in {section}: {', '.join(unknown)}"
+            )
         missing_fields = sorted(required_fields - set(section_value))
         if missing_fields:
             qualified = ", ".join(
@@ -213,6 +201,11 @@ def load_config(path: Path) -> dict[str, Any]:
             )
             raise ConfigError(f"missing required field(s): {qualified}")
 
+    unknown_sections = sorted(set(loaded) - set(DEFAULTS))
+    if unknown_sections:
+        raise ConfigError(
+            f"unknown top-level section: {unknown_sections[0]}"
+        )
     return merge_defaults(DEFAULTS, loaded)
 
 
@@ -462,7 +455,7 @@ def resolve_config(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
     except ValueError:
         source_config = str(config_path.resolve())
 
-    return {
+    resolved = {
         "schema_version": 1,
         "mode": "dry-run",
         "source_config": source_config,
@@ -526,70 +519,17 @@ def resolve_config(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
             "torch_cuda": torch.version.cuda,
             "cuda_device_count": torch.cuda.device_count(),
         },
-        "mapped_args": {
-            "train_args": {
-                "exp_name": run_id,
-                "seed": seed,
-                "numIters": iterations,
-                "numEps": games_per_iteration,
-                "numMCTSSims": mcts_simulations,
-                "tempThreshold": temperature_threshold,
-                "cpuct": cpuct,
-                "dirichlet_alpha": dirichlet_alpha,
-                "dirichlet_epsilon": dirichlet_epsilon,
-                "max_game_length": max_game_length,
-                "eval_mcts_in_batch": eval_mcts_in_batch,
-                "maxlenOfQueue": max_queue_size,
-                "max_train_size": max_samples,
-                "batch_size": batch_size,
-                "lr": learning_rate,
-                "checkpoint": checkpoint_dir,
-                "save_every_n_iterations": save_every_iterations,
-                "load_model": False,
-                "load_examples": False,
-                "load_folder_file": [checkpoint_dir, "best.pth.tar"],
-                "load_folder_examples_file": [
-                    checkpoint_dir,
-                    "latest.examples",
-                ],
-                "numItersForTrainExamplesHistory": replay_history_iterations,
-                "arenaCompare": 4 if update_gating else 0,
-                "updateThreshold": update_threshold if update_gating else -0.51,
-                "print_summary": True,
-            },
-            "nn_args": {
-                "cuda": True,
-                "lr": learning_rate,
-                "dropout": 0.3,
-                "weight_decay": 0.0001,
-                "lr_decay_gamma": 1.0,
-                "epochs": epochs,
-                "batch_size": batch_size,
-                "num_channels": num_channels,
-                "num_res_blocks": num_res_blocks,
-                "attn_depth": attn_depth,
-                "num_heads": num_heads,
-                "se_enabled": se_enabled,
-                "fast_opts": fast_opts,
-                "clip": gradient_clip,
-                "use_amp": amp,
-                "amp_dtype": amp_dtype,
-            },
-            "evaluation_args": {
-                "enabled": evaluation_enabled,
-                "games_per_opponent": games_per_opponent,
-                "opponents": list(opponents),
-                "model_mcts_simulations": model_mcts_simulations,
-                "temperature": evaluation_temperature,
-                "dirichlet_noise": evaluation_dirichlet_noise,
-                "max_game_length": evaluation_max_game_length,
-            },
-        },
         "resolved_config_path": (
             Path(output_display) / "resolved_config.yaml"
         ).as_posix(),
         "_output_path": output_dir,
     }
+    resolved["mapped_args"] = {
+        "train_args": map_baseline_to_train_args(resolved),
+        "nn_args": map_model_to_nn_args(resolved),
+        "evaluation_args": copy.deepcopy(resolved["evaluation"]),
+    }
+    return resolved
 
 
 def save_resolved_config(resolved: dict[str, Any]) -> Path:
@@ -597,23 +537,8 @@ def save_resolved_config(resolved: dict[str, Any]) -> Path:
     serializable = {
         key: value for key, value in resolved.items() if key != "_output_path"
     }
-    output_dir.mkdir(parents=True, exist_ok=True)
     resolved_path = output_dir / "resolved_config.yaml"
-    temporary_path = output_dir / "resolved_config.yaml.tmp"
-
-    try:
-        with temporary_path.open("w", encoding="utf-8", newline="\n") as output_file:
-            yaml.safe_dump(
-                serializable,
-                output_file,
-                sort_keys=False,
-                allow_unicode=True,
-            )
-        temporary_path.replace(resolved_path)
-    except Exception:
-        temporary_path.unlink(missing_ok=True)
-        raise
-    return resolved_path
+    return atomic_write_yaml(resolved_path, serializable)
 
 
 def print_resolved_config(resolved: dict[str, Any]) -> None:
@@ -632,40 +557,6 @@ def print_resolved_config(resolved: dict[str, Any]) -> None:
     print(f"Output: {run['output_dir']}")
 
 
-class MetricsJsonlWriter:
-    """Write and durably flush one JSON object per completed iteration."""
-
-    def __init__(self, path: Path, *, append: bool = False):
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        mode = "a" if append else "w"
-        self._file = self.path.open(mode, encoding="utf-8", newline="\n")
-
-    def __call__(self, metrics: dict[str, Any]) -> None:
-        if metrics.get("optimizer_steps", 0) <= 0:
-            raise ValueError("metrics.optimizer_steps must be greater than zero")
-        serialized = json.dumps(metrics, ensure_ascii=False, allow_nan=False)
-        self._file.write(serialized + "\n")
-        self._file.flush()
-        os.fsync(self._file.fileno())
-
-    def close(self) -> None:
-        self._file.close()
-
-    def __enter__(self) -> "MetricsJsonlWriter":
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.close()
-
-
-FORMAL_ARTIFACT_NAMES = {
-    "metrics.jsonl",
-    "latest.examples",
-    "evaluation.json",
-    "summary.json",
-    "run.log",
-}
 CHECKPOINT_PATTERN = re.compile(r"^checkpoint_(\d+)\.pth\.tar$")
 
 
@@ -684,25 +575,6 @@ def rebase_output_directory(resolved: dict[str, Any], output_dir: Path) -> dict[
     train_args["load_folder_file"] = [checkpoint_display, "best.pth.tar"]
     train_args["load_folder_examples_file"] = [checkpoint_display, "latest.examples"]
     return rebased
-
-
-def find_formal_artifacts(output_dir: Path) -> list[Path]:
-    candidates = [
-        output_dir / "metrics.jsonl",
-        output_dir / "evaluation.json",
-        output_dir / "summary.json",
-        output_dir / "run.log",
-        output_dir / "checkpoints" / "latest.examples",
-    ]
-    artifacts = [path for path in candidates if path.exists()]
-    checkpoint_dir = output_dir / "checkpoints"
-    if checkpoint_dir.is_dir():
-        artifacts.extend(
-            path
-            for path in checkpoint_dir.iterdir()
-            if path.is_file() and CHECKPOINT_PATTERN.match(path.name)
-        )
-    return sorted(artifacts, key=lambda path: str(path).lower())
 
 
 def check_runtime_dependencies() -> None:
@@ -749,14 +621,10 @@ def read_metrics(path: Path) -> list[dict[str, Any]]:
 def load_run_resolved_config(run_dir: Path) -> dict[str, Any]:
     absolute_run_dir = run_dir.expanduser().resolve()
     path = absolute_run_dir / "resolved_config.yaml"
-    if not path.is_file():
-        raise ConfigError(f"resolved config not found: {path}")
     try:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"invalid resolved config in {path}: {exc}") from exc
-    if not isinstance(loaded, dict):
-        raise ConfigError(f"resolved config must be a mapping: {path}")
+        loaded = load_yaml(path)
+    except ConfigError as exc:
+        raise ConfigError(f"could not load resolved config {path}: {exc}") from exc
     loaded["_output_path"] = absolute_run_dir
     return rebase_output_directory(loaded, absolute_run_dir)
 
@@ -935,46 +803,6 @@ class RunLog:
         self._file.close()
 
 
-def write_summary(
-    resolved: dict[str, Any],
-    *,
-    mode: str,
-    status: str,
-    evaluation_path: Path | None,
-) -> Path:
-    metrics_path = resolved["_output_path"] / "metrics.jsonl"
-    metrics = read_metrics(metrics_path) if metrics_path.is_file() else []
-    summary = {
-        "schema_version": 1,
-        "mode": mode,
-        "status": status,
-        "completed_iterations": [record["iteration"] for record in metrics],
-        "target_iterations": resolved["self_play"]["iterations"],
-        "final_checkpoint": metrics[-1]["checkpoint_path"] if metrics else None,
-        "metrics_path": metrics_path.as_posix() if metrics else None,
-        "evaluation_path": evaluation_path.as_posix() if evaluation_path else None,
-        "evaluation": (
-            json.loads(evaluation_path.read_text(encoding="utf-8"))
-            if evaluation_path and evaluation_path.is_file()
-            else None
-        ),
-        "resume_semantics": (
-            "Iteration-boundary resume: model weights and replay history are restored; "
-            "optimizer, scheduler, and RNG state are not restored."
-        ),
-        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
-    }
-    path = resolved["_output_path"] / "summary.json"
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    os.replace(temporary, path)
-    return path
-
-
 def run_training(
     resolved: dict[str, Any],
     *,
@@ -993,7 +821,7 @@ def run_training(
         train_args.load_model = True
         train_args.load_examples = True
         train_args.load_folder_file = [str(resume_checkpoint.parent), resume_checkpoint.name]
-        nnet.load_checkpoint(str(resume_checkpoint.parent), resume_checkpoint.name)
+        load_model_checkpoint(nnet, resume_checkpoint)
 
     metrics_path = resolved["_output_path"] / "metrics.jsonl"
     with MetricsJsonlWriter(metrics_path, append=(mode == "resume")) as metrics_writer:

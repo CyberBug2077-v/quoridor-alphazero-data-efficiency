@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+
+from runtime.artifacts import atomic_write_json
 
 
 BASELINE_ROOT = Path(__file__).resolve().parents[1]
@@ -97,9 +97,12 @@ def evaluate_checkpoint(
     game,
     nnet,
     checkpoint: Path | None = None,
+    output_path: Path | None = None,
 ) -> tuple[dict[str, Any], Path]:
     evaluation = resolved["evaluation"]
-    final_iteration = resolved["self_play"]["iterations"]
+    final_iteration = resolved["self_play"].get("iterations")
+    if final_iteration is None:
+        final_iteration = resolved.get("budget", {}).get("max_iterations")
     checkpoint_dir = Path(resolved["checkpoint"]["directory"])
     numbered_checkpoint = checkpoint_dir / f"checkpoint_{final_iteration}.pth.tar"
     checkpoint_path = checkpoint or (
@@ -169,10 +172,5 @@ def evaluate_checkpoint(
         if not torch.equal(parameter.detach(), parameters_before[name]):
             raise RuntimeError(f"evaluation modified model parameter: {name}")
 
-    output_path = resolved["_output_path"] / "evaluation.json"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_suffix(".json.tmp")
-    serialized = json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
-    temporary_path.write_text(serialized + "\n", encoding="utf-8", newline="\n")
-    os.replace(temporary_path, output_path)
-    return result, output_path
+    destination = output_path or (resolved["_output_path"] / "evaluation.json")
+    return result, atomic_write_json(destination, result)

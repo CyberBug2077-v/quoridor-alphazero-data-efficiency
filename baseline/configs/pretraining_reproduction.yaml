@@ -1,0 +1,48 @@
+run:
+  id: pretraining_reproduction_seed1001
+  seed: 1001
+  device: cuda
+  gpu_index: 0
+  deterministic: false
+  output_dir: outputs/pretraining_reproduction_seed1001
+
+data:
+  archive_path: data/heuristic_games.zip
+  extracted_path: data/heuristic_games/heuristic_games.pkl
+  expected_sha256: a8ab71e26f6835168abb297258664838527c6a3d6a206c2457732e8cdbc5b34e
+  validate_before_training: true
+
+# This block is an experiment invariant. Pilot, Baseline, and Adaptive must
+# retain it exactly so they can all start from the same checkpoint_0.
+model:
+  board_size: 9
+  num_channels: 128
+  num_res_blocks: 6
+  attn_depth: 1
+  num_heads: 8
+  se_enabled: false
+  dropout: 0.3
+
+pretraining:
+  epochs: 10
+  batch_size: 2048
+  learning_rate: 0.0005
+  optimizer: adamw
+  weight_decay: 0.0001
+  gradient_clip: 1.0
+  amp: true
+  amp_dtype: bf16
+
+checkpoint:
+  directory: outputs/pretraining_reproduction_seed1001/checkpoints
+  checkpoint_0_filename: checkpoint_0.pth.tar
+  best_filename: best.pth.tar
+  save_rng_state: true
+  compute_sha256: true
+
+logging:
+  metrics_file: pretraining_metrics.jsonl
+  metadata_file: run_metadata.json
+  evaluation_file: evaluation.json
+  summary_file: summary.json
+  log_every_optimizer_steps: 100
