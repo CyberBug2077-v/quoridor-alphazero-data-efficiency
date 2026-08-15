@@ -17,7 +17,7 @@ import run_pretraining
 from runtime.metadata import sha256_file
 
 
-BASELINE_ROOT = Path(__file__).resolve().parents[1]
+BASELINE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def make_probe_config(

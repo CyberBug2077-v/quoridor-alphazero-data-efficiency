@@ -44,14 +44,19 @@ baseline/
 |   |-- verify_pretraining.py
 |   |-- run_baseline.py
 |   |-- verify_baseline.py
+|   |-- summarize_pilot.py
 |   |-- run_smoke.py       Baseline GPU smoke-test entry point
 |   `-- original/          Preserved upstream/legacy launch scripts for reference
 |-- tests/
+|   |-- pretraining/
+|   |   |-- test_pretraining_entrypoint.py
+|   |   |-- test_pretraining_probe.py
+|   |   `-- test_verify_pretraining.py
+|   |-- baseline/
+|   |   |-- test_baseline_lifecycle.py
+|   |   `-- test_summarize_pilot.py
 |   |-- runtime/           Shared runtime unit tests
-|   |-- smoke/             Game, MCTS, network, modes, and smoke E2E tests
-|   |-- test_pretraining_entrypoint.py
-|   |-- test_pretraining_probe.py
-|   `-- test_verify_pretraining.py
+|   `-- smoke/             Game, MCTS, network, modes, and smoke E2E tests
 `-- outputs/               Generated local run artifacts; not source code
 ```
 
@@ -140,6 +145,23 @@ is a fresh run stopped after iteration 5 followed by `resume` to iteration 7;
 baseline configuration retains null GPU-hour, iteration, checkpoint-cadence,
 and evaluation-cadence fields until the benchmark fixes those values.
 
+After the pilot and its evaluations finish, generate the read-only timing and
+capacity analysis with:
+
+```bash
+python scripts/summarize_pilot.py --run-dir outputs/baseline_pilot_seed1001
+python scripts/summarize_pilot.py --run-dir outputs/baseline_pilot_seed1001 --gpu-hours 24
+```
+
+The command writes `pilot_report.json`. It reports per-iteration self-play,
+network-training, evaluation, replay, optimizer, GPU-memory, per-game, and
+per-position costs; compares iteration 1 with later iterations; and projects
+capacity from the median after excluding iteration 1 as warm-up. Repeating
+`--gpu-hours` adds more projection budgets. It never edits the resolved pilot
+configuration or the formal reproduction configuration. Evaluation artifacts
+created by the current code record measured evaluation duration; older files
+without timing remain readable and are explicitly marked as unmeasured.
+
 ## Environment
 
 The current Windows development environment uses a Conda environment named
@@ -208,9 +230,11 @@ and a mock network; they do not construct the formal model or write formal
 outputs:
 
 ```bash
-python -m pytest tests/test_pretraining_entrypoint.py
-python -m pytest tests/test_pretraining_probe.py -m "not gpu"
-python -m pytest tests/test_verify_pretraining.py
+python -m pytest tests/pretraining/test_pretraining_entrypoint.py
+python -m pytest tests/pretraining/test_pretraining_probe.py -m "not gpu"
+python -m pytest tests/pretraining/test_verify_pretraining.py
+python -m pytest tests/baseline/test_baseline_lifecycle.py
+python -m pytest tests/baseline/test_summarize_pilot.py
 ```
 
 The registered markers are:
@@ -225,7 +249,7 @@ PowerShell, enable and run it with:
 
 ```powershell
 $env:RUN_FORMAL_PRETRAINING_PROBE = "1"
-python -m pytest tests/test_pretraining_probe.py -m "gpu and slow and integration"
+python -m pytest tests/pretraining/test_pretraining_probe.py -m "gpu and slow and integration"
 ```
 
 Without that environment variable, the formal probe test is skipped. The

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +100,7 @@ def evaluate_checkpoint(
     checkpoint: Path | None = None,
     output_path: Path | None = None,
 ) -> tuple[dict[str, Any], Path]:
+    evaluation_start = time.perf_counter()
     evaluation = resolved["evaluation"]
     final_iteration = resolved["self_play"].get("iterations")
     if final_iteration is None:
@@ -130,7 +132,9 @@ def evaluate_checkpoint(
         "opponents": {},
     }
     base_seed = int(resolved["run"]["seed"])
+    opponent_seconds: dict[str, float] = {}
     for opponent_index, opponent in enumerate(evaluation["opponents"]):
+        opponent_start = time.perf_counter()
         games = []
         counts = {"wins": 0, "draws": 0, "losses": 0}
         total_moves = 0
@@ -167,10 +171,25 @@ def evaluate_checkpoint(
             "illegal_actions": illegal_actions,
             "games": games,
         }
+        opponent_seconds[opponent] = time.perf_counter() - opponent_start
 
     for name, parameter in nnet.nnet.named_parameters():
         if not torch.equal(parameter.detach(), parameters_before[name]):
             raise RuntimeError(f"evaluation modified model parameter: {name}")
+
+    evaluation_seconds = time.perf_counter() - evaluation_start
+    games_evaluated = sum(
+        len(opponent_result["games"])
+        for opponent_result in result["opponents"].values()
+    )
+    result["timing"] = {
+        "evaluation_seconds": evaluation_seconds,
+        "per_opponent_seconds": opponent_seconds,
+        "games_evaluated": games_evaluated,
+        "seconds_per_game": (
+            evaluation_seconds / games_evaluated if games_evaluated else None
+        ),
+    }
 
     destination = output_path or (resolved["_output_path"] / "evaluation.json")
     return result, atomic_write_json(destination, result)
