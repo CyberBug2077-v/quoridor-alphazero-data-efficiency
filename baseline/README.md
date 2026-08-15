@@ -38,9 +38,20 @@ baseline/
 |   |-- js-mcts/           Heuristic JavaScript MCTS opponent
 |   `-- quoridor-server/   Arena rules and move-legality implementation
 |-- scripts/
+|   |-- runtime/           Shared config, artifact, metadata, and checkpoint code
+|   |-- probe_pretraining_batch.py
+|   |-- run_pretraining.py
+|   |-- verify_pretraining.py
+|   |-- run_baseline.py
+|   |-- verify_baseline.py
 |   |-- run_smoke.py       Baseline GPU smoke-test entry point
 |   `-- original/          Preserved upstream/legacy launch scripts for reference
-|-- tests/                 Baseline compatibility and regression tests
+|-- tests/
+|   |-- runtime/           Shared runtime unit tests
+|   |-- smoke/             Game, MCTS, network, modes, and smoke E2E tests
+|   |-- test_pretraining_entrypoint.py
+|   |-- test_pretraining_probe.py
+|   `-- test_verify_pretraining.py
 `-- outputs/               Generated local run artifacts; not source code
 ```
 
@@ -50,12 +61,55 @@ scripts. They are not authoritative experiment launchers.
 
 ## Formal reproduction entry points
 
-Validate and run supervised pretraining:
+The formal workflow is ordered. First probe the configured batch with the
+formal model and dataset, then validate the full configuration, run fresh
+pretraining, and finally verify the frozen result:
 
 ```bash
+python scripts/probe_pretraining_batch.py --config configs/pretraining_reproduction.yaml --batch-size 2048 --steps 1
 python scripts/run_pretraining.py dry-run --config configs/pretraining_reproduction.yaml
 python scripts/run_pretraining.py fresh --config configs/pretraining_reproduction.yaml
+python scripts/verify_pretraining.py --run-dir outputs/pretraining_reproduction_seed1001
 ```
+
+The batch probe uses the formal network and dataset but writes only to
+`outputs/pretraining_probe/`; it never creates or modifies the formal
+pretraining run directory or a checkpoint. It returns zero only when the
+optimizer step succeeds, all recorded values are finite, no formal artifact is
+changed, and the conservative memory margin is at least 1 GiB and 10% of total
+GPU memory. OOM, other runtime failures, or insufficient margin return status
+2 while still preserving a diagnostic JSON whenever execution reaches the
+probe result stage.
+
+On the current RTX 4070 Laptop GPU, batch 2048 completed one optimizer step
+without OOM, but peak reserved memory left only 903.5 MiB. It therefore failed
+the conservative margin check. Do not start formal pretraining from that result
+alone; first approve a smaller physical batch or gradient accumulation that
+preserves the intended effective batch.
+
+`run_pretraining.py` supports only `dry-run` and `fresh`. It does not resume,
+self-play, evaluate opponents, or create replay state. `fresh` refuses any
+existing content in its output directory and produces:
+
+```text
+outputs/pretraining_reproduction_seed1001/
+|-- resolved_config.yaml
+|-- run_metadata.json
+|-- pretraining_metrics.jsonl
+|-- summary.json
+|-- run.log
+`-- checkpoints/
+    |-- checkpoint_0.pth.tar
+    `-- best.pth.tar
+```
+
+JSON, YAML, and checkpoint commits use temporary files followed by atomic
+replacement; a failed write must not leave a `.tmp` artifact behind.
+
+`verify_pretraining.py` is read-only. It re-hashes the dataset and both
+checkpoints, loads checkpoints on CPU, reconstructs the configured model to
+compare every state-dict name and shape, checks finite metrics and weights, and
+rejects incomplete `.tmp` artifacts.
 
 After copying the resulting `checkpoint_0_sha256` from the pretraining summary
 into `initialization.expected_sha256`, validate or launch the fixed-games
@@ -73,6 +127,12 @@ python scripts/verify_baseline.py --run-dir outputs/baseline_pilot_seed1001
 and always creates an empty online replay. `resume` restores a numbered model
 checkpoint, replay history, RNG state, cumulative GPU-hours, and the reserved
 instrumentation state from the same run.
+
+The pilot configuration targets seven iterations. Its intended recovery test
+is a fresh run stopped after iteration 5 followed by `resume` to iteration 7;
+`--stop-after-iteration` is a normal stopped state, not a failure. The formal
+baseline configuration retains null GPU-hour, iteration, checkpoint-cadence,
+and evaluation-cadence fields until the benchmark fixes those values.
 
 ## Environment
 
@@ -126,6 +186,46 @@ and `evaluate-only` accepts `--checkpoint PATH` for an explicit model file.
 `verify_smoke.py` is read-only: it does not construct or run the model, and
 validates the completed artifact tree, metrics, replay history, reloadable
 checkpoint state dictionaries, evaluation results, and run identity.
+
+## Test suite
+
+Pytest configuration lives in `pytest.ini`, uses `tests/` as its only discovery
+root, and rejects unregistered markers. Run the complete suite from this
+directory with:
+
+```bash
+python -m pytest
+```
+
+The pretraining lifecycle tests use temporary directories, synthetic data,
+and a mock network; they do not construct the formal model or write formal
+outputs:
+
+```bash
+python -m pytest tests/test_pretraining_entrypoint.py
+python -m pytest tests/test_pretraining_probe.py -m "not gpu"
+python -m pytest tests/test_verify_pretraining.py
+```
+
+The registered markers are:
+
+- `gpu`: allocates or otherwise requires a CUDA-capable GPU;
+- `slow`: materially slower than ordinary unit and artifact tests;
+- `integration`: crosses process, filesystem, dataset, model, or GPU boundaries;
+- `e2e`: runs the complete smoke train/resume/evaluate/verify pipeline.
+
+The real formal-scale batch probe is opt-in even on GPU machines. On
+PowerShell, enable and run it with:
+
+```powershell
+$env:RUN_FORMAL_PRETRAINING_PROBE = "1"
+python -m pytest tests/test_pretraining_probe.py -m "gpu and slow and integration"
+```
+
+Without that environment variable, the formal probe test is skipped. The
+ordinary probe tests still cover argument validation, output isolation,
+OOM/runtime failure handling, valid JSON output, input immutability, and the
+absence of formal checkpoints.
 
 ## Data and generated artifacts
 
