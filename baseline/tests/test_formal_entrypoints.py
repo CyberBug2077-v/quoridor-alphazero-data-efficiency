@@ -15,6 +15,21 @@ from runtime.checkpointing import save_run_state
 from runtime.metadata import sha256_file
 
 
+def test_baseline_run_log_tee_delegates_isatty(tmp_path: Path) -> None:
+    class TtyStream:
+        def __init__(self, is_tty: bool):
+            self.is_tty = is_tty
+
+        def isatty(self) -> bool:
+            return self.is_tty
+
+    log_path = tmp_path / "run.log"
+    with log_path.open("w", encoding="utf-8") as log:
+        assert run_baseline._Tee(TtyStream(True), log).isatty() is True
+        assert run_baseline._Tee(TtyStream(False), log).isatty() is False
+        assert run_baseline._Tee(object(), log).isatty() is False
+
+
 def test_pretraining_dataset_validation(tmp_path: Path) -> None:
     archive = tmp_path / "data.zip"
     archive.write_bytes(b"archive")

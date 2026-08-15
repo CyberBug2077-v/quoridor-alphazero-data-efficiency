@@ -57,6 +57,10 @@ class _Tee:
         self.stream.flush()
         self.log.flush()
 
+    def isatty(self) -> bool:
+        method = getattr(self.stream, "isatty", None)
+        return bool(method and method())
+
 
 class RunLog:
     def __init__(self, path: Path, *, append: bool):
