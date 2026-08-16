@@ -1,10 +1,10 @@
 run:
-  id: baseline_reproduction_seed1001
+  id: baseline_reproduction_seed1001_4090
   seed: 1001
   device: cuda
   gpu_index: 0
   deterministic: false
-  output_dir: outputs/baseline_reproduction_seed1001
+  output_dir: outputs/baseline_reproduction_seed1001_4090
 
 # Baseline and Adaptive must point to this exact pretrained snapshot. This is
 # initialization of a fresh online replay, not restoration of an online run.
@@ -27,15 +27,15 @@ model:
   se_enabled: false
   dropout: 0.3
 
-# Fill these three fields only after the 1-2 hour benchmark. max_iterations is
-# a safety ceiling, not a request to alter any algorithmic setting.
+# Frozen after the RTX 4090 pilot. The GPU-hour budget and iteration target are
+# fixed; no separate wall-clock cutoff is used.
 budget:
-  max_gpu_hours: null
+  max_gpu_hours: 24
   max_wall_clock_hours: null
-  max_iterations: null
+  max_iterations: 210
 
 self_play:
-  iterations: null
+  iterations: 210
   games_per_iteration: 75
   mcts_simulations: 200
   eval_mcts_in_batch: 10
@@ -65,8 +65,8 @@ replay:
   history_iterations: 150
 
 checkpoint:
-  directory: outputs/baseline_reproduction_seed1001/checkpoints
-  save_every_iterations: null
+  directory: outputs/baseline_reproduction_seed1001_4090/checkpoints
+  save_every_iterations: 10
   save_replay_state: true
   save_instrumentation_state: true
   save_rng_state: true
@@ -90,8 +90,10 @@ logging:
 
 evaluation:
   enabled: true
-  evaluate_every_iterations: null
-  games_per_opponent: null
+  # Planned checkpoints: pretrained iteration 0 (evaluate-only), every 20
+  # iterations through 200, and final iteration 210.
+  evaluate_every_iterations: 20
+  games_per_opponent: 2
   opponents:
     - random
     - greedy

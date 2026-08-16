@@ -31,7 +31,8 @@ def test_reproduction_configs_resolve_and_map() -> None:
     assert pretraining["mapped_args"]["nn_args"] == map_model_to_nn_args(pretraining)
     assert pilot["mapped_args"]["train_args"] == map_baseline_to_train_args(pilot)
     assert pilot["mapped_args"]["train_args"]["numIters"] == 7
-    assert baseline["mapped_args"]["train_args"]["numIters"] is None
+    assert baseline["mapped_args"]["train_args"]["numIters"] == 210
+    assert baseline["mapped_args"]["train_args"]["save_every_n_iterations"] == 10
     assert Path(pilot["mapped_args"]["train_args"]["checkpoint"]).is_absolute()
     assert pilot["mapped_args"]["train_args"]["micro_batch_size"] == 2048
     assert pilot["mapped_args"]["nn_args"]["gradient_accumulation_steps"] == 1

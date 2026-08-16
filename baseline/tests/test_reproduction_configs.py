@@ -103,11 +103,22 @@ def test_pilot_and_baseline_algorithm_conditions_match() -> None:
     pilot = load_config("baseline_pilot.yaml")
     baseline = load_config("baseline_reproduction.yaml")
 
-    for section in ("model", "training", "replay"):
+    for section in ("model", "training", "replay", "instrumentation", "logging"):
         assert pilot[section] == baseline[section], section
     pilot_self_play = {key: value for key, value in pilot["self_play"].items() if key != "iterations"}
     baseline_self_play = {key: value for key, value in baseline["self_play"].items() if key != "iterations"}
     assert pilot_self_play == baseline_self_play
+    pilot_evaluation = {
+        key: value
+        for key, value in pilot["evaluation"].items()
+        if key != "evaluate_every_iterations"
+    }
+    baseline_evaluation = {
+        key: value
+        for key, value in baseline["evaluation"].items()
+        if key != "evaluate_every_iterations"
+    }
+    assert pilot_evaluation == baseline_evaluation
 
     assert pilot["self_play"]["iterations"] == 7
     assert pilot["self_play"]["eval_mcts_in_batch"] == 10
@@ -142,17 +153,51 @@ def test_pilot_exercises_resume_metrics_and_read_only_evaluation() -> None:
     )
 
 
-def test_formal_budget_and_cadence_await_benchmark() -> None:
+def test_formal_budget_and_cadence_are_frozen() -> None:
     baseline = load_config("baseline_reproduction.yaml")
 
+    assert baseline["run"]["id"] == "baseline_reproduction_seed1001_4090"
+    assert baseline["run"]["seed"] == 1001
+    assert baseline["run"]["output_dir"] == (
+        "outputs/baseline_reproduction_seed1001_4090"
+    )
     assert baseline["budget"] == {
-        "max_gpu_hours": None,
+        "max_gpu_hours": 24,
         "max_wall_clock_hours": None,
-        "max_iterations": None,
+        "max_iterations": 210,
     }
-    assert baseline["checkpoint"]["save_every_iterations"] is None
-    assert baseline["evaluation"]["evaluate_every_iterations"] is None
-    assert baseline["evaluation"]["games_per_opponent"] is None
+    assert baseline["self_play"]["iterations"] == 210
+    assert baseline["checkpoint"] == {
+        "directory": "outputs/baseline_reproduction_seed1001_4090/checkpoints",
+        "save_every_iterations": 10,
+        "save_replay_state": True,
+        "save_instrumentation_state": True,
+        "save_rng_state": True,
+        "compute_sha256": True,
+    }
+    assert baseline["evaluation"]["evaluate_every_iterations"] == 20
+    assert baseline["evaluation"]["games_per_opponent"] == 2
+    cadence = baseline["evaluation"]["evaluate_every_iterations"]
+    final_iteration = baseline["self_play"]["iterations"]
+    planned_evaluations = [
+        0,
+        *range(cadence, final_iteration, cadence),
+        final_iteration,
+    ]
+    assert planned_evaluations == [
+        0,
+        20,
+        40,
+        60,
+        80,
+        100,
+        120,
+        140,
+        160,
+        180,
+        200,
+        210,
+    ]
 
 
 def test_every_config_has_standard_logging_files() -> None:

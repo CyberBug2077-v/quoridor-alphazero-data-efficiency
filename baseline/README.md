@@ -153,9 +153,21 @@ instrumentation state from the same run.
 
 The pilot configuration targets seven iterations. Its intended recovery test
 is a fresh run stopped after iteration 5 followed by `resume` to iteration 7;
-`--stop-after-iteration` is a normal stopped state, not a failure. The formal
-baseline configuration retains null GPU-hour, iteration, checkpoint-cadence,
-and evaluation-cadence fields until the benchmark fixes those values.
+`--stop-after-iteration` is a normal stopped state, not a failure.
+
+The RTX 4090 formal baseline is frozen as
+`baseline_reproduction_seed1001_4090` with seed 1001, a target of 210
+iterations and a 24 GPU-hour budget, 75 self-play games per iteration, 200 MCTS
+simulations, self-play inference batch 10, four training epochs, effective and
+micro-batch 2048, learning rate 0.0002, and replay history 150. Numbered
+checkpoints are written every 10 iterations and evaluation is scheduled every
+20 iterations. All other algorithmic, initialization, instrumentation, and
+evaluation settings are inherited from the accepted pilot and frozen.
+
+The formal evaluation set is the pretrained iteration 0 checkpoint, iterations
+20, 40, 60, 80, 100, 120, 140, 160, 180, and 200, plus final checkpoint 210.
+Iteration 0 is evaluated explicitly with `evaluate-only`; cadence 20 covers
+20–200, and the completed training entry point evaluates checkpoint 210.
 
 After the pilot and its evaluations finish, generate the read-only timing and
 capacity analysis with:
