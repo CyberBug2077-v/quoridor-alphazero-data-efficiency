@@ -87,15 +87,18 @@ GPU memory. OOM, other runtime failures, or insufficient margin return status
 probe result stage.
 
 `batch_size` is the effective optimizer batch, while `micro_batch_size` is the
-number of samples placed on the GPU for one forward/backward pass. Both formal
-pretraining and baseline training retain effective batch 2048, use micro-batch
-1024, and therefore perform two backward passes followed by one gradient clip
-and optimizer step. The effective batch must be divisible by the micro-batch.
+number of samples placed on the GPU for one forward/backward pass. Formal
+pretraining and baseline training both retain effective batch 2048. The frozen
+pretraining run used micro-batch 1024 and therefore two backward passes per
+optimizer step. Baseline pilot, formal baseline reproduction, and subsequent
+experiments target the RTX 4090 with micro-batch 2048, so each effective batch
+uses one forward/backward pass followed by one gradient clip and optimizer
+step. The effective batch must be divisible by the micro-batch.
 
-The 20-step trial on the current RTX 4070 Laptop GPU passed: 20 optimizer
-steps, 40 micro-batches, and 40,960 samples were recorded; peak reserved memory
-was 3,846 MiB and the conservative remaining margin was 3,172 MiB (38.7%). The
-result is stored as
+The completed 20-step pretraining trial on the RTX 4070 Laptop GPU passed: 20
+optimizer steps, 40 micro-batches, and 40,960 samples were recorded; peak
+reserved memory was 3,846 MiB and the conservative remaining margin was 3,172
+MiB (38.7%). The result is stored as
 `outputs/pretraining_probe/effective_2048_micro_1024_steps_20_trial_1.json`.
 
 `run_pretraining.py` supports only `dry-run` and `fresh`. It does not resume,

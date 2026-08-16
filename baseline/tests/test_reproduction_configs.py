@@ -75,7 +75,7 @@ def test_all_reproduction_configs_share_the_model() -> None:
     assert pretraining["pretraining"]["batch_size"] == 2048
     assert pretraining["pretraining"]["micro_batch_size"] == 1024
     assert pilot["training"]["batch_size"] == 2048
-    assert pilot["training"]["micro_batch_size"] == 1024
+    assert pilot["training"]["micro_batch_size"] == 2048
     assert pilot["training"] == baseline["training"]
 
 
@@ -112,7 +112,7 @@ def test_pilot_and_baseline_algorithm_conditions_match() -> None:
     assert pilot["self_play"]["iterations"] == 7
     assert pilot["training"]["update_gating"] is False
     assert pilot["training"]["batch_size"] == 2048
-    assert pilot["training"]["micro_batch_size"] == 1024
+    assert pilot["training"]["micro_batch_size"] == 2048
     assert "expert_top_up" not in walk_keys(pilot)
     assert "expert_top_up" not in walk_keys(baseline)
 

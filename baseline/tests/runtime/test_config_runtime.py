@@ -33,7 +33,8 @@ def test_reproduction_configs_resolve_and_map() -> None:
     assert pilot["mapped_args"]["train_args"]["numIters"] == 7
     assert baseline["mapped_args"]["train_args"]["numIters"] is None
     assert Path(pilot["mapped_args"]["train_args"]["checkpoint"]).is_absolute()
-    assert pilot["mapped_args"]["train_args"]["micro_batch_size"] == 1024
+    assert pilot["mapped_args"]["train_args"]["micro_batch_size"] == 2048
+    assert pilot["mapped_args"]["nn_args"]["gradient_accumulation_steps"] == 1
     assert pretraining["mapped_args"]["nn_args"]["batch_size"] == 2048
     assert pretraining["mapped_args"]["nn_args"]["micro_batch_size"] == 1024
     assert pretraining["mapped_args"]["nn_args"]["gradient_accumulation_steps"] == 2
@@ -73,7 +74,7 @@ def test_baseline_rejects_expert_top_up(tmp_path: Path) -> None:
         resolve_baseline_config(load_yaml(path), path)
 
 
-def test_effective_2048_micro_1024_batch_configuration_is_valid() -> None:
+def test_effective_2048_batch_configurations_are_valid() -> None:
     pretraining_path = CONFIG_ROOT / "pretraining_reproduction.yaml"
     pilot_path = CONFIG_ROOT / "baseline_pilot.yaml"
 
@@ -85,7 +86,7 @@ def test_effective_2048_micro_1024_batch_configuration_is_valid() -> None:
     assert pretraining["pretraining"]["batch_size"] == 2048
     assert pretraining["pretraining"]["micro_batch_size"] == 1024
     assert pilot["training"]["batch_size"] == 2048
-    assert pilot["training"]["micro_batch_size"] == 1024
+    assert pilot["training"]["micro_batch_size"] == 2048
 
 
 @pytest.mark.parametrize(
