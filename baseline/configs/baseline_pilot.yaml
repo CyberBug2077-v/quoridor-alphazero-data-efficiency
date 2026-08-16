@@ -1,10 +1,10 @@
 run:
-  id: baseline_pilot_seed1001
+  id: baseline_pilot_seed1001_4090
   seed: 1001
   device: cuda
   gpu_index: 0
   deterministic: false
-  output_dir: outputs/baseline_pilot_seed1001
+  output_dir: outputs/baseline_pilot_seed1001_4090
 
 # This is weight initialization for a new online run, never a resume. No
 # pretraining examples, replay, optimizer, or tracker state may be restored.
@@ -35,7 +35,7 @@ self_play:
   iterations: 7
   games_per_iteration: 75
   mcts_simulations: 200
-  eval_mcts_in_batch: 4
+  eval_mcts_in_batch: 10
   temperature_threshold: 15
   cpuct: 1.25
   dirichlet_noise: true
@@ -61,7 +61,7 @@ replay:
   history_iterations: 150
 
 checkpoint:
-  directory: outputs/baseline_pilot_seed1001/checkpoints
+  directory: outputs/baseline_pilot_seed1001_4090/checkpoints
   save_every_iterations: 1
   save_replay_state: true
   save_instrumentation_state: true

@@ -110,6 +110,10 @@ def test_pilot_and_baseline_algorithm_conditions_match() -> None:
     assert pilot_self_play == baseline_self_play
 
     assert pilot["self_play"]["iterations"] == 7
+    assert pilot["self_play"]["eval_mcts_in_batch"] == 10
+    assert baseline["self_play"]["eval_mcts_in_batch"] == 10
+    assert pilot["evaluation"]["eval_mcts_in_batch"] == 4
+    assert baseline["evaluation"]["eval_mcts_in_batch"] == 4
     assert pilot["training"]["update_gating"] is False
     assert pilot["training"]["batch_size"] == 2048
     assert pilot["training"]["micro_batch_size"] == 2048
@@ -121,7 +125,7 @@ def test_pilot_exercises_resume_metrics_and_read_only_evaluation() -> None:
     pilot = load_config("baseline_pilot.yaml")
 
     assert pilot["checkpoint"] == {
-        "directory": "outputs/baseline_pilot_seed1001/checkpoints",
+        "directory": "outputs/baseline_pilot_seed1001_4090/checkpoints",
         "save_every_iterations": 1,
         "save_replay_state": True,
         "save_instrumentation_state": True,

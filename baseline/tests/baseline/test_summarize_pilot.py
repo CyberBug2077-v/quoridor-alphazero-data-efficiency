@@ -16,7 +16,7 @@ def test_summarize_pilot_reports_timings_and_projection_without_changing_inputs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    run_dir = tmp_path / "baseline_pilot_seed1001"
+    run_dir = tmp_path / "baseline_pilot_seed1001_4090"
     evaluation_dir = run_dir / "evaluations"
     evaluation_dir.mkdir(parents=True)
     config = {

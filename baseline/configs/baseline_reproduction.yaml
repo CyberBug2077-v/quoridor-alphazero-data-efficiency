@@ -38,7 +38,7 @@ self_play:
   iterations: null
   games_per_iteration: 75
   mcts_simulations: 200
-  eval_mcts_in_batch: 4
+  eval_mcts_in_batch: 10
   temperature_threshold: 15
   cpuct: 1.25
   dirichlet_noise: true

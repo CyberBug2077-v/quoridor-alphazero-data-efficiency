@@ -132,10 +132,19 @@ baseline:
 ```bash
 python scripts/run_baseline.py dry-run --config configs/baseline_pilot.yaml
 python scripts/run_baseline.py fresh --config configs/baseline_pilot.yaml --stop-after-iteration 5
-python scripts/run_baseline.py resume --run-dir outputs/baseline_pilot_seed1001
-python scripts/run_baseline.py evaluate-only --run-dir outputs/baseline_pilot_seed1001
-python scripts/verify_baseline.py --run-dir outputs/baseline_pilot_seed1001
+python scripts/run_baseline.py resume --run-dir outputs/baseline_pilot_seed1001_4090
+python scripts/run_baseline.py evaluate-only --run-dir outputs/baseline_pilot_seed1001_4090
+python scripts/verify_baseline.py --run-dir outputs/baseline_pilot_seed1001_4090
 ```
+
+The RTX 4090 pilot uses run ID and output directory
+`baseline_pilot_seed1001_4090`. The completed RTX 4070 pilot is retained
+separately as `outputs/baseline_pilot_seed1001_4070`.
+
+To improve RTX 4090 utilization, pilot and formal baseline self-play batch 10
+MCTS neural-network evaluations at a time (`self_play.eval_mcts_in_batch: 10`).
+The separate random/greedy evaluation pipeline remains at
+`evaluation.eval_mcts_in_batch: 4` so its measurement protocol is unchanged.
 
 `fresh` initializes only model weights from the frozen pretrained checkpoint
 and always creates an empty online replay. `resume` restores a numbered model
@@ -152,8 +161,8 @@ After the pilot and its evaluations finish, generate the read-only timing and
 capacity analysis with:
 
 ```bash
-python scripts/summarize_pilot.py --run-dir outputs/baseline_pilot_seed1001
-python scripts/summarize_pilot.py --run-dir outputs/baseline_pilot_seed1001 --gpu-hours 24
+python scripts/summarize_pilot.py --run-dir outputs/baseline_pilot_seed1001_4090
+python scripts/summarize_pilot.py --run-dir outputs/baseline_pilot_seed1001_4090 --gpu-hours 24
 ```
 
 The command writes `pilot_report.json`. It reports per-iteration self-play,
