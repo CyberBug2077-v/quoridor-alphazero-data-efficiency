@@ -1,77 +1,77 @@
-# Baseline 分析复现实验操作手册
+# Baseline Analysis Reproduction Manual
 
-本目录对已经完成的 baseline reproduction 做离线分析和固定对手评估。它不重新训练模型，也不改变训练协议。本文只固定分析协议、操作方法、输入输出和验收条件，不记录任何具体实验得分。
+This directory contains the offline analyses and fixed-opponent evaluation for the completed baseline reproduction. It does not retrain the model or change the training protocol. This manual fixes the analysis protocol, commands, input and output contracts, and acceptance criteria; it intentionally does not record experimental scores.
 
-以下命令均假定当前工作目录为 `baseline/`：
+All commands below assume that the working directory is `baseline/`:
 
 ```powershell
 cd I:\dissertation\src\baseline
 ```
 
-应使用运行 baseline reproduction 时相同的 Python 环境。JavaScript heuristic 对手还要求本机可执行 `node`。
+Use the same Python environment as the baseline reproduction. The JavaScript heuristic opponents also require `node` to be available on `PATH`.
 
-## 分析范围
+## What the analysis covers
 
-当前包含三类分析：
+The current workflow has three parts:
 
-1. **训练效率与 replay 派生指标**：从逐轮训练指标计算生成效率、GPU 时间占比、buffer 流入/消耗、样本暴露、淘汰量、turnover 和样本年龄。
-2. **最终 replay 快照分析**：分析第 210 轮保存的 150 轮 rolling window，包括 canonical state 多样性、重复率、state-effective count、每轮游戏数量和长度分布，以及按 `step` 重置恢复的游戏边界。
-3. **固定篮子评估**：让指定 checkpoint 对阵相同的四类固定对手，使用固定 seed、固定颜色安排和固定 150 回合上限，生成逐局记录、checkpoint 汇总、对手分层汇总和 provisional Elo。
+1. **Training-efficiency and replay-derived metrics.** Derive generation efficiency, GPU-time fractions, replay inflow and consumption, sample exposure, eviction, turnover, and sample-age metrics from the per-iteration training log.
+2. **Final replay snapshot analysis.** Analyse the 150-iteration rolling window saved at iteration 210, including canonical-state diversity, duplicate rate, state-effective count, per-iteration game counts and length distributions, and game boundaries recovered from `step` resets.
+3. **Fixed-basket evaluation.** Evaluate selected checkpoints against the same four opponents under fixed seeds, side assignments, MCTS settings, temperature schedule, and 150-turn limit. Produce per-game records, checkpoint summaries, opponent-stratified summaries, and provisional Elo ratings.
 
-本目录目前**不生成** hold-out 评估、plateau 判定结果或论文图片。`baseline_gate2.yaml` 中这些路径是后续分析的预留接口，不能据此认为相应实验已经运行。
+This directory does **not currently generate** the hold-out evaluation, plateau decision, or publication figures. The corresponding paths in `baseline_gate2.yaml` are reserved for later work and do not mean that those analyses have been run.
 
-## 配置权威性
+## Authoritative configurations
 
-| 配置 | 负责内容 |
+| Configuration | Authority |
 |---|---|
-| `analysis/configs/baseline_gate2.yaml` | baseline run ID、replay/state hash/派生指标定义、输入来源和分析输出路径登记 |
-| `analysis/configs/fixed_basket_v1.yaml` | 当前固定篮子的唯一权威协议：checkpoint、对手、局数、颜色、MCTS、温度和 seed |
+| `analysis/configs/baseline_gate2.yaml` | Baseline run ID, replay and state-hash definitions, derived-metric definitions, input provenance, and registered analysis output paths |
+| `analysis/configs/fixed_basket_v1.yaml` | The authoritative fixed-basket protocol: checkpoints, opponents, game counts, side schedule, MCTS settings, temperature schedule, and seed |
 
-固定篮子脚本不会读取 `baseline_gate2.yaml` 中的 `fixed_basket` 段。若两份配置中的固定篮子字段不同，以 `fixed_basket_v1.yaml` 为准。
+The fixed-basket scripts do not read the `fixed_basket` section in `baseline_gate2.yaml`. If the two files disagree about fixed-basket settings, `fixed_basket_v1.yaml` is authoritative.
 
-state hash 固定定义为：
+The state hash is fixed as:
 
 ```text
 SHA256(dtype + shape + contiguous canonical-board bytes)
 ```
 
-不做额外 symmetry reduction，也不把原始状态或状态哈希写入 replay 汇总输出。
+No additional symmetry reduction is applied. Replay summaries export neither raw states nor state hashes.
 
-## 输入来源
+## Input provenance
 
-默认分析对象是：
+The default source run is:
 
 ```text
 outputs/baseline_reproduction_seed1001_4090/
 ```
 
-| 输入 | 来源 | 使用者 |
+| Input | Source | Used by |
 |---|---|---|
-| `metrics.jsonl` | baseline 每轮训练记录 | `derive_baseline_metrics.py`、`summarize_replay.py` |
-| `resolved_config.yaml` | baseline 实际解析配置 | `derive_baseline_metrics.py`、`summarize_replay.py` |
-| `run_metadata.json` | run ID、模型配置和 checkpoint 来源 | `evaluate_fixed_basket.py` |
-| `checkpoints/latest.examples` | 第 210 轮 rolling replay 快照 | `summarize_replay.py` |
-| 初始 checkpoint | `run_metadata.json` 记录的预训练/初始 checkpoint 路径 | `evaluate_fixed_basket.py` 的 checkpoint 0 |
-| checkpoint 20–210 | baseline run 的 checkpoint manifest/目录 | `evaluate_fixed_basket.py` |
+| `metrics.jsonl` | Per-iteration baseline training records | `derive_baseline_metrics.py`, `summarize_replay.py` |
+| `resolved_config.yaml` | Configuration resolved by the baseline run | `derive_baseline_metrics.py`, `summarize_replay.py` |
+| `run_metadata.json` | Run ID, model configuration, and checkpoint provenance | `evaluate_fixed_basket.py` |
+| `checkpoints/latest.examples` | Rolling replay snapshot saved at iteration 210 | `summarize_replay.py` |
+| Initial checkpoint | Pretrained or initial checkpoint path recorded in `run_metadata.json` | Checkpoint 0 in `evaluate_fixed_basket.py` |
+| Checkpoints 20–210 | Checkpoint manifest and checkpoint directory in the baseline run | `evaluate_fixed_basket.py` |
 
-评估脚本在开始比赛前解析 checkpoint 路径并记录 SHA-256。checkpoint 0 不假定存在于 baseline checkpoint 目录中；其路径来自 `run_metadata.json`。
+Before playing games, the evaluator resolves every checkpoint path and records its SHA-256 in the evaluation manifest. Checkpoint 0 is not assumed to live in the baseline checkpoint directory; its path comes from `run_metadata.json`.
 
-## 是否修改原始结果
+## Does the analysis modify the source results?
 
-这些脚本不会修改 `metrics.jsonl`、`resolved_config.yaml`、`run_metadata.json`、`latest.examples` 或 checkpoint 内容。
+The scripts do not modify `metrics.jsonl`, `resolved_config.yaml`, `run_metadata.json`, `latest.examples`, or checkpoint contents.
 
-- `derive_baseline_metrics.py` 默认在原 run 下新增或原子更新 `gate2/` 中自己的三个派生产物，但不覆盖任何原始训练文件。
-- replay 和 fixed-basket 产物写入独立的 `outputs/baseline_seed1001_4090_analysis/`。
-- fixed-basket 每局完成后只向分析目录的 `games.jsonl` 追加并立即刷新。
-- `--resume` 读取既有逐局记录并跳过已经完成的稳定比赛键，不会重复比赛。
-- `--verify-source-integrity` 比较评估前后的源 run 文件清单；任何变化都会使评估失败。
-- 既有 random + greedy sanity evaluation 不属于本协议，也不会被这些脚本覆盖。
+- By default, `derive_baseline_metrics.py` creates or atomically updates its three derived artifacts under the source run's new `gate2/` subdirectory. It does not overwrite a training artifact.
+- Replay and fixed-basket outputs are written under the separate `outputs/baseline_seed1001_4090_analysis/` root.
+- The evaluator appends and flushes one record to the analysis `games.jsonl` immediately after each completed game.
+- `--resume` reads the existing game records and skips completed stable game keys, so an interrupted run does not duplicate games.
+- `--verify-source-integrity` compares the source-run file inventory before and after evaluation. Any change fails the evaluation.
+- The existing random + greedy sanity evaluation is outside this protocol and is not overwritten.
 
-重复运行汇总脚本会更新其自身的 CSV/manifest 汇总。正式逐局结果已经存在时，评估脚本要求显式传入 `--resume`。
+Re-running a summary script updates that script's own CSV or manifest summary. If formal per-game output already exists, the evaluator requires an explicit `--resume`.
 
-## 1. 派生 baseline 指标
+## 1. Derive baseline metrics
 
-运行：
+Run:
 
 ```powershell
 python analysis/scripts/derive_baseline_metrics.py `
@@ -80,7 +80,7 @@ python analysis/scripts/derive_baseline_metrics.py `
   --output-dir outputs/baseline_reproduction_seed1001_4090/gate2
 ```
 
-输出：
+Outputs:
 
 ```text
 outputs/baseline_reproduction_seed1001_4090/gate2/
@@ -89,7 +89,7 @@ outputs/baseline_reproduction_seed1001_4090/gate2/
 `-- data_quality_report.json
 ```
 
-`derived_metrics.csv` 每轮至少包含：
+`derived_metrics.csv` contains at least the following fields for every iteration:
 
 - `fresh_states_per_update`
 - `states_per_gpu_hour`
@@ -106,17 +106,17 @@ outputs/baseline_reproduction_seed1001_4090/gate2/
 - `median_sample_age`
 - `p90_sample_age`
 
-成功条件：进程退出码为 0，`data_quality_report.json` 的 `status` 为 `passed`，210 轮全部通过，四项 `checks` 均为 `true`，且所有派生字段完整、有限。最近 150 轮 `positions_generated` 重建出的 replay buffer 必须与每轮记录的 `replay_buffer_size` 完全一致。
+Success requires exit code 0, `data_quality_report.json.status == "passed"`, all 210 iterations passing, all four entries in `checks` being `true`, and every derived value being present and finite. The replay size reconstructed from the most recent 150 iterations of `positions_generated` must exactly equal the recorded `replay_buffer_size` at every iteration.
 
-## 2. 汇总最终 replay
+## 2. Summarise the final replay
 
-默认路径已经与正式 baseline run 对齐，因此可直接运行：
+The defaults already target the formal baseline run, so the short command is:
 
 ```powershell
 python analysis/scripts/summarize_replay.py
 ```
 
-等价的显式命令为：
+The equivalent explicit command is:
 
 ```powershell
 python analysis/scripts/summarize_replay.py `
@@ -129,7 +129,7 @@ python analysis/scripts/summarize_replay.py `
   --expected-total-states 284234
 ```
 
-输出：
+Outputs:
 
 ```text
 outputs/baseline_seed1001_4090_analysis/replay/
@@ -138,7 +138,7 @@ outputs/baseline_seed1001_4090_analysis/replay/
 `-- trajectory_stats.csv
 ```
 
-成功时终端必须显示：
+A successful run prints at least:
 
 ```text
 Replay iteration: 210
@@ -150,11 +150,11 @@ Count matches metrics: yes
 Output status: completed
 ```
 
-此外，`replay_final_summary.json` 中的所有 `validations` 必须为 `true`。快照只保留第 61–210 轮，因此不能恢复第 1–60 轮的 buffer-level diversity，也不能恢复训练时每个状态实际被抽取的次数。
+Every entry in `replay_final_summary.json.validations` must also be `true`. The snapshot retains only iterations 61–210, so it cannot recover buffer-level diversity for iterations 1–60 or the number of times each state was actually sampled during training.
 
-## 3. 固定篮子预检与 pilot
+## 3. Fixed-basket preflight and pilot
 
-仅解析协议、checkpoint 和 JS determinism，不比赛：
+Resolve the protocol and checkpoints and test JS determinism without playing games:
 
 ```powershell
 python analysis/scripts/evaluate_fixed_basket.py `
@@ -164,7 +164,7 @@ python analysis/scripts/evaluate_fixed_basket.py `
   --prepare-only
 ```
 
-运行 16 局 pilot：
+Run the 16-game pilot and summarise it:
 
 ```powershell
 python analysis/scripts/evaluate_fixed_basket.py `
@@ -176,7 +176,7 @@ python analysis/scripts/evaluate_fixed_basket.py `
 python analysis/scripts/summarize_fixed_basket.py --mode pilot
 ```
 
-pilot 输出目录：
+Pilot outputs:
 
 ```text
 outputs/baseline_seed1001_4090_analysis/fixed_basket_v1_pilot/
@@ -187,11 +187,11 @@ outputs/baseline_seed1001_4090_analysis/fixed_basket_v1_pilot/
 `-- evaluation.log
 ```
 
-pilot 成功条件：checkpoint 0 和 210 均能加载；四类对手各有模型执白和执黑一局；JS 进程正常启动和退出；`games.jsonl` 恰好 16 行；`invalid_move=0`、`bot_error=0`；第 6 个模型动作开始温度为 0；源 run 不变；再次使用 `--resume` 时不重复已有比赛。
+Pilot acceptance requires checkpoints 0 and 210 to load; one model-white and one model-black game against each opponent; clean JS process startup and shutdown; exactly 16 lines in `games.jsonl`; zero `invalid_move` and `bot_error` terminations; temperature 0 from the model's sixth move onward; no change to the source run; and no duplicated games after resuming with `--resume`.
 
-## 4. 运行完整固定篮子评估
+## 4. Run the complete fixed-basket evaluation
 
-首次运行：
+First run:
 
 ```powershell
 python analysis/scripts/evaluate_fixed_basket.py `
@@ -199,7 +199,7 @@ python analysis/scripts/evaluate_fixed_basket.py `
   --verify-source-integrity
 ```
 
-中断后继续：
+Resume an interrupted run:
 
 ```powershell
 python analysis/scripts/evaluate_fixed_basket.py `
@@ -208,19 +208,19 @@ python analysis/scripts/evaluate_fixed_basket.py `
   --verify-source-integrity
 ```
 
-评估协议固定为 12 个 checkpoint、4 个对手、每个 checkpoint–opponent 50 局，共 2400 局。每组前 25 局模型执白、后 25 局模型执黑；`max_turns=150`。每局 seed 由 protocol ID、base seed、checkpoint、opponent ID 和 game index 稳定生成。
+The protocol fixes 12 checkpoints, four opponents, and 50 games per checkpoint–opponent pair, for 2,400 games. The model plays white in the first 25 games and black in the final 25 games of every pair. `max_turns` is 150. Each game seed is derived stably from the protocol ID, base seed, checkpoint, opponent ID, and game index.
 
-只在确认某条记录需要重跑时使用以下恢复选项：
+Use the retry options only after identifying a record that genuinely needs replaying:
 
 ```powershell
-# 重跑所有指定错误终止类型
+# Replay every game with the selected error termination.
 python analysis/scripts/evaluate_fixed_basket.py --mode formal --resume --retry-termination bot_error
 
-# 重跑一个稳定比赛键
+# Replay one stable game key.
 python analysis/scripts/evaluate_fixed_basket.py --mode formal --resume --retry-game 210:heuristic_200:2
 ```
 
-正式输出目录：
+Formal outputs:
 
 ```text
 outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/
@@ -233,53 +233,53 @@ outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/
 `-- evaluation.log
 ```
 
-评估完成后运行汇总：
+After evaluation, generate the summaries:
 
 ```powershell
 python analysis/scripts/summarize_fixed_basket.py --mode formal
 ```
 
-正式评估成功条件：
+Formal acceptance requires:
 
-- `evaluation_manifest.json` 的 `status` 为 `completed`；
-- 12 个 checkpoint 和 4 个对手全部覆盖；
-- 48 个 checkpoint–opponent 分组各 50 局，且模型执白/执黑为 25/25；
-- `games.jsonl` 有 2400 个唯一稳定比赛键；
-- `invalid_move=0`、`bot_error=0`、`fault=0`；
-- 达到回合上限的比赛允许存在，但必须记录为 `termination=max_turns` 并单独汇总；
-- 每局温度历史符合前 5 个模型动作 0.18、从第 6 个模型动作起 0；
-- 使用完整性检查时，`source_integrity.status=passed` 且 `changed_paths` 为空；
-- 汇总终端显示 `Observed games: 2400`、`Expected games: 2400` 和 `Summary status: completed`；
-- `checkpoint_summary.csv` 为 12 行，`opponent_summary.csv` 为 48 行；
-- score rate 满足 `(wins + 0.5 * draws) / games`，固定篮子总分等于四种对手得分的等权平均；
-- 95% 置信区间按“对手 × 模型执棋颜色”分层 bootstrap；
-- 当前 Elo 必须标记为 `provisional` 并记录固定随机 seed。Adaptive 完成后，应将 Baseline checkpoint、Adaptive checkpoint 和固定对手放入同一个最终 Elo 拟合中。
+- `evaluation_manifest.json.status == "completed"`;
+- complete coverage of 12 checkpoints and four opponents;
+- 50 games in each of the 48 checkpoint–opponent groups, split 25/25 by model colour;
+- 2,400 unique stable game keys in `games.jsonl`;
+- zero `invalid_move`, `bot_error`, and non-null `fault` records;
+- games reaching the turn limit may exist, but must use `termination == "max_turns"` and be reported separately;
+- every recorded temperature history must use 0.18 for the first five model moves and 0 from the sixth model move onward;
+- when source-integrity checking is enabled, `source_integrity.status == "passed"` and `changed_paths` is empty;
+- summary output containing `Observed games: 2400`, `Expected games: 2400`, and `Summary status: completed`;
+- 12 rows in `checkpoint_summary.csv` and 48 rows in `opponent_summary.csv`;
+- score rate equal to `(wins + 0.5 * draws) / games`, with the fixed-basket score equal to the equal-weight mean of the four opponent scores;
+- 95% confidence intervals calculated by bootstrap stratified by opponent and model colour; and
+- Elo marked `provisional` with a fixed random seed. After Adaptive evaluation, Baseline checkpoints, Adaptive checkpoints, and fixed opponents must be fitted together in one final Elo model.
 
-## 测试
+## Tests
 
-修改分析代码后运行：
+After changing analysis code, run:
 
 ```powershell
 python -m pytest analysis/tests -q
 ```
 
-测试失败时不要发布或引用新汇总；先修复对应脚本，再重新生成受影响的分析产物。
+Do not publish or cite regenerated summaries when these tests fail. Fix the affected script first, then regenerate only the affected analysis artifacts.
 
-## 论文图表映射
+## Mapping outputs to dissertation figures and tables
 
-仓库当前没有固定论文图号。论文排版时应按下表取数，不要从终端日志或手工复制的中间值作图。
+The repository does not currently assign final dissertation figure numbers. During writing, use the following source mapping rather than terminal output or manually copied intermediate values.
 
-| 论文内容 | 权威数据源 | 建议用途 |
+| Dissertation content | Authoritative source | Intended use |
 |---|---|---|
-| 训练资源与效率表 | `gate2/baseline_resource_summary.json` | 总 GPU hours、生成/训练占比、aggregate throughput |
-| 逐轮效率曲线 | `gate2/derived_metrics.csv` | states/games per GPU hour、fresh states/update、buffer 消耗与样本暴露 |
-| replay 动态图 | `gate2/derived_metrics.csv` | turnover、eviction、mean/median/p90 sample age 随 iteration 变化 |
-| 最终 replay 多样性表或图 | `replay/replay_iteration_stats.csv`、`replay/replay_final_summary.json` | incoming unique ratio、duplicate rate、state-effective count、最终 unique ratio |
-| 自博弈轨迹长度分布 | `replay/trajectory_stats.csv` | 每轮游戏数、长度分布和轨迹边界质量检查 |
-| Baseline checkpoint 学习曲线 | `fixed_basket_v1/checkpoint_summary.csv` | 固定篮子 score rate 与分层 bootstrap 置信区间 |
-| 分对手性能图或表 | `fixed_basket_v1/opponent_summary.csv` | checkpoint × opponent 的分层表现和颜色平衡 |
-| Elo 附录或诊断图 | `fixed_basket_v1/elo_summary.csv` | 仅用于 provisional baseline Elo；最终论文 Elo 使用联合拟合结果 |
-| 方法与可复现性附录 | `evaluation_manifest.json`、`protocol.resolved.yaml` | seed、checkpoint 来源、协议、完整性状态和数据质量说明 |
-| 逐局审计 | `fixed_basket_v1/games.jsonl` | 对异常终止、回合上限、颜色和比赛 seed 做追溯，不直接作为论文主表 |
+| Training-resource and efficiency table | `gate2/baseline_resource_summary.json` | Total GPU hours, generation/training fractions, and aggregate throughput |
+| Per-iteration efficiency curves | `gate2/derived_metrics.csv` | States or games per GPU hour, fresh states per update, replay consumption, and sample exposure |
+| Replay-dynamics figure | `gate2/derived_metrics.csv` | Turnover, eviction, and mean/median/p90 sample age over iteration |
+| Final replay-diversity table or figure | `replay/replay_iteration_stats.csv`, `replay/replay_final_summary.json` | Incoming unique ratio, duplicate rate, state-effective count, and final unique ratio |
+| Self-play trajectory-length distribution | `replay/trajectory_stats.csv` | Per-iteration game counts, game-length distributions, and trajectory-boundary checks |
+| Baseline checkpoint learning curve | `fixed_basket_v1/checkpoint_summary.csv` | Fixed-basket score rate and stratified bootstrap confidence intervals |
+| Per-opponent comparison | `fixed_basket_v1/opponent_summary.csv` | Checkpoint-by-opponent performance and side balance |
+| Elo appendix or diagnostic figure | `fixed_basket_v1/elo_summary.csv` | Provisional baseline-only Elo; the final dissertation Elo must use the joint fit |
+| Methods and reproducibility appendix | `evaluation_manifest.json`, `protocol.resolved.yaml` | Seeds, checkpoint provenance, protocol, source-integrity status, and data-quality notes |
+| Per-game audit | `fixed_basket_v1/games.jsonl` | Trace abnormal termination, turn-limit games, colours, and game seeds; not a main result table |
 
-任何论文图表都应保留其源 CSV/JSON 路径、筛选规则和统计方法。图中使用的 fixed-basket score 必须来自 `checkpoint_summary.csv`；不能与既有 random + greedy sanity evaluation 混用。
+Every dissertation figure or table should retain its source CSV or JSON path, filtering rule, and statistical method. Fixed-basket scores must come from `checkpoint_summary.csv` and must not be mixed with the existing random + greedy sanity evaluation.

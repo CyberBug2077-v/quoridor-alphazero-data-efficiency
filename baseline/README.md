@@ -30,6 +30,12 @@ extension experiments.
 
 ```text
 baseline/
+|-- analysis/              Offline metrics, replay, and fixed-basket evaluation
+|   |-- configs/           Frozen analysis and evaluation protocols
+|   |-- js/                Seeded bridge for the JavaScript MCTS opponent
+|   |-- scripts/           Analysis and fixed-basket entry points
+|   |-- tests/             Analysis protocol and data-contract tests
+|   `-- README.md          Reproducible analysis operations manual
 |-- arena/                 Fixed opponents, adapters, Elo, and match utilities
 |-- configs/               Smoke-test and baseline configuration files
 |-- data/                  Local pretraining artifacts (not normal Git content)
@@ -63,6 +69,10 @@ baseline/
 Legacy entry points and shell launchers are retained only as references until
 their required behaviour has been extracted into the new configuration-driven
 scripts. They are not authoritative experiment launchers.
+
+The post-run analysis workflow is documented separately in
+[`analysis/README.md`](analysis/README.md). Its fixed-basket evaluation is kept
+separate from the existing random + greedy sanity evaluation.
 
 ## Formal reproduction entry points
 
