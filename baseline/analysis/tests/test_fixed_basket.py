@@ -73,6 +73,17 @@ def test_pilot_and_formal_default_output_directories_are_separate() -> None:
     assert pilot.parent == formal.parent
     assert pilot != formal
 
+    protocol = formal_protocol()
+    pilot_protocol = evaluate.apply_execution_overrides(
+        protocol, mode="pilot", games_per_opponent=2
+    )
+    assert pilot_protocol["games_per_opponent"] == 2
+    assert protocol["games_per_opponent"] == 50
+    with pytest.raises(evaluate.FixedBasketError):
+        evaluate.apply_execution_overrides(
+            protocol, mode="formal", games_per_opponent=2
+        )
+
 
 def test_scheduled_temperature_uses_five_early_model_moves(monkeypatch) -> None:
     observed = []
@@ -101,6 +112,7 @@ def test_scheduled_temperature_uses_five_early_model_moves(monkeypatch) -> None:
         bot.select_move(None)
 
     assert observed == [0.18, 0.18, 0.18, 0.18, 0.18, 0.0, 0.0]
+    assert bot.temperature_history == observed
 
 
 def test_stable_game_seed_is_repeatable_distinct_and_uint32() -> None:
@@ -118,6 +130,23 @@ def test_stable_game_seed_is_repeatable_distinct_and_uint32() -> None:
     assert first == repeated
     assert len({first, other_game, other_opponent}) == 3
     assert all(0 <= seed <= 0xFFFFFFFF for seed in (first, other_game, other_opponent))
+
+
+def test_source_directory_hash_snapshot_detects_changes(tmp_path: Path) -> None:
+    source = tmp_path / "training_run"
+    source.mkdir()
+    artifact = source / "checkpoint.bin"
+    artifact.write_bytes(b"unchanged")
+
+    before = evaluate.snapshot_directory_hashes(source)
+    same = evaluate.snapshot_directory_hashes(source)
+    assert evaluate.compare_directory_snapshots(before, same)["unchanged"] is True
+
+    artifact.write_bytes(b"changed")
+    after = evaluate.snapshot_directory_hashes(source)
+    comparison = evaluate.compare_directory_snapshots(before, after)
+    assert comparison["unchanged"] is False
+    assert comparison["changed_paths"] == ["checkpoint.bin"]
 
 
 def test_checkpoint_zero_comes_from_metadata_and_other_names_are_discovered(
@@ -283,9 +312,47 @@ def test_evaluation_loads_once_splits_sides_and_forces_150_turns(
         "duration_seconds",
         "fault",
         "moves",
+        "model_temperatures",
     }
     assert all(required_fields <= record.keys() for record in records)
     assert all(len(record["moves"]) == 10 for record in records)
+
+    resumed = evaluate.evaluate_matchups(
+        protocol,
+        [entry],
+        games_path,
+        board_size=9,
+        model_factory=model_factory,
+        opponent_factory=opponent_factory,
+        play_game_fn=fake_play_game,
+    )
+    assert resumed == 0
+    assert len(games_path.read_text().splitlines()) == 4
+    assert creations == {"model": 1, "opponents": 2}
+
+    interrupted_path = tmp_path / "interrupted-games.jsonl"
+    interrupted_path.write_text(
+        "\n".join(games_path.read_text().splitlines()[:3]) + "\n",
+        encoding="utf-8",
+    )
+    resumed_partial = evaluate.evaluate_matchups(
+        protocol,
+        [entry],
+        interrupted_path,
+        board_size=9,
+        model_factory=model_factory,
+        opponent_factory=opponent_factory,
+        play_game_fn=fake_play_game,
+    )
+    interrupted_records = [
+        json.loads(line) for line in interrupted_path.read_text().splitlines()
+    ]
+    interrupted_keys = {
+        (record["checkpoint"], record["opponent"], record["game_index"])
+        for record in interrupted_records
+    }
+    assert resumed_partial == 1
+    assert len(interrupted_records) == len(interrupted_keys) == 4
 
 
 def test_summarizer_requires_50_games_and_25_per_side(tmp_path: Path) -> None:
@@ -338,6 +405,7 @@ def test_summarizer_requires_50_games_and_25_per_side(tmp_path: Path) -> None:
                         "duration_seconds": 1.0,
                         "fault": None,
                         "moves": [],
+                        "model_temperatures": [0.18] * 5 + [0.0],
                     }
                 )
     games_path = tmp_path / "games.jsonl"
@@ -437,6 +505,7 @@ def test_pilot_summary_is_isolated_and_only_writes_checkpoint_csv(
                     "duration_seconds": 1.0,
                     "fault": None,
                     "moves": [],
+                    "model_temperatures": [0.18] * 5 + [0.0],
                 }
             )
     pilot_dir = tmp_path / "fixed_basket_v1_pilot"

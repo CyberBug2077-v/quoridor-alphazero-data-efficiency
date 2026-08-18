@@ -59,6 +59,7 @@ REQUIRED_GAME_FIELDS = frozenset(
         "duration_seconds",
         "fault",
         "moves",
+        "model_temperatures",
     }
 )
 
@@ -106,6 +107,7 @@ class ScheduledTemperatureAlphaZeroBot(AlphaZeroBot):
         self.early_temp = early_temp
         self.early_moves = early_moves
         self.later_temp = later_temp
+        self.temperature_history = []
 
     def select_move(self, board):
         self.temp = (
@@ -113,6 +115,7 @@ class ScheduledTemperatureAlphaZeroBot(AlphaZeroBot):
             if self.turn_count < self.early_moves
             else self.later_temp
         )
+        self.temperature_history.append(self.temp)
         return super().select_move(board)
 
 
@@ -196,6 +199,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Evaluate a configured checkpoint subset; the manifest still covers all.",
     )
     parser.add_argument(
+        "--games-per-opponent",
+        type=int,
+        help="Pilot-only even game count override; formal evaluation remains fixed at 50.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a compatible games.jsonl and skip completed game keys.",
+    )
+    parser.add_argument(
+        "--verify-source-integrity",
+        action="store_true",
+        help="Hash every file in the source training run before and after evaluation.",
+    )
+    parser.add_argument(
         "--prepare-only",
         action="store_true",
         help="Resolve/hash checkpoints and verify JS determinism without playing games.",
@@ -209,6 +227,63 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def snapshot_directory_hashes(root: Path) -> dict[str, Any]:
+    root = root.expanduser().resolve()
+    if not root.is_dir():
+        raise FixedBasketError(f"source integrity directory not found: {root}")
+    files = []
+    for path in sorted(
+        (candidate for candidate in root.rglob("*") if candidate.is_file()),
+        key=lambda candidate: candidate.relative_to(root).as_posix(),
+    ):
+        before = path.stat()
+        digest = _sha256(path)
+        after = path.stat()
+        if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns:
+            raise FixedBasketError(
+                f"source file changed while hashing: {path.relative_to(root)}"
+            )
+        files.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "size_bytes": before.st_size,
+                "sha256": digest,
+            }
+        )
+    canonical = json.dumps(
+        files, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return {
+        "root": root.as_posix(),
+        "file_count": len(files),
+        "total_size_bytes": sum(entry["size_bytes"] for entry in files),
+        "tree_sha256": hashlib.sha256(canonical).hexdigest(),
+        "files": files,
+    }
+
+
+def compare_directory_snapshots(
+    before: dict[str, Any], after: dict[str, Any]
+) -> dict[str, Any]:
+    before_files = {entry["path"]: entry for entry in before["files"]}
+    after_files = {entry["path"]: entry for entry in after["files"]}
+    changed_paths = sorted(
+        path
+        for path in before_files.keys() | after_files.keys()
+        if before_files.get(path) != after_files.get(path)
+    )
+    return {
+        "root": before["root"],
+        "before_file_count": before["file_count"],
+        "after_file_count": after["file_count"],
+        "before_tree_sha256": before["tree_sha256"],
+        "after_tree_sha256": after["tree_sha256"],
+        "unchanged": not changed_paths,
+        "changed_paths": changed_paths,
+        "files": before["files"],
+    }
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -263,7 +338,9 @@ def _load_json(path: Path) -> dict[str, Any]:
     return loaded
 
 
-def load_protocol(path: Path) -> dict[str, Any]:
+def load_protocol(
+    path: Path, *, allow_games_per_opponent_override: bool = False
+) -> dict[str, Any]:
     path = path.expanduser().resolve()
     if not path.is_file():
         raise FixedBasketError(f"protocol configuration not found: {path}")
@@ -273,12 +350,17 @@ def load_protocol(path: Path) -> dict[str, Any]:
         raise FixedBasketError(f"invalid protocol YAML: {exc}") from exc
     if not isinstance(protocol, dict):
         raise FixedBasketError("protocol configuration must contain a mapping")
-    validate_protocol(protocol)
+    validate_protocol(
+        protocol,
+        allow_games_per_opponent_override=allow_games_per_opponent_override,
+    )
     protocol["_path"] = path
     return protocol
 
 
-def validate_protocol(protocol: dict[str, Any]) -> None:
+def validate_protocol(
+    protocol: dict[str, Any], *, allow_games_per_opponent_override: bool = False
+) -> None:
     expected_checkpoints = [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 210]
     if protocol.get("schema_version") != 1:
         raise FixedBasketError("schema_version must be 1")
@@ -289,8 +371,16 @@ def validate_protocol(protocol: dict[str, Any]) -> None:
     if protocol.get("checkpoints") != expected_checkpoints:
         raise FixedBasketError("checkpoint sequence does not match fixed_basket_v1")
     games = protocol.get("games_per_opponent")
-    if isinstance(games, bool) or not isinstance(games, int) or games != 50:
-        raise FixedBasketError("games_per_opponent must be 50")
+    valid_game_count = (
+        not isinstance(games, bool)
+        and isinstance(games, int)
+        and games > 0
+        and games % 2 == 0
+        and (games <= 50 if allow_games_per_opponent_override else games == 50)
+    )
+    if not valid_game_count:
+        expected = "an even integer from 2 to 50" if allow_games_per_opponent_override else "50"
+        raise FixedBasketError(f"games_per_opponent must be {expected}")
     if games % 2 or protocol.get("alternate_sides") is not True:
         raise FixedBasketError("games must split evenly across alternating sides")
     if protocol.get("max_turns") != 150:
@@ -324,6 +414,20 @@ def validate_protocol(protocol: dict[str, Any]) -> None:
     }
     if model != required_model:
         raise FixedBasketError("model settings do not match fixed_basket_v1")
+
+
+def apply_execution_overrides(
+    protocol: dict[str, Any], *, mode: str, games_per_opponent: int | None
+) -> dict[str, Any]:
+    if games_per_opponent is None:
+        return protocol
+    if mode != "pilot":
+        raise FixedBasketError("--games-per-opponent is only allowed in pilot mode")
+    effective = dict(protocol)
+    effective["games_per_opponent"] = games_per_opponent
+    validate_protocol(effective, allow_games_per_opponent_override=True)
+    effective["_path"] = protocol["_path"]
+    return effective
 
 
 def _resolve_recorded_path(recorded: str, run_dir: Path) -> Path:
@@ -646,6 +750,8 @@ def set_all_seeds(seed: int) -> None:
 
 def _prepare_bot(bot: Any, color: str) -> Any:
     prepared = _prep_bot(bot, color)
+    if hasattr(prepared, "temperature_history"):
+        prepared.temperature_history = []
     for child_name in ("_random", "_greedy"):
         child = getattr(prepared, child_name, None)
         if child is not None:
@@ -726,6 +832,7 @@ def _game_record(
     game_seed: int,
     model_color: str,
     result: MatchResult,
+    model_temperatures: Sequence[float],
 ) -> dict[str, Any]:
     opponent_color = "black" if model_color == "white" else "white"
     return {
@@ -751,6 +858,7 @@ def _game_record(
         "opponent_move_seconds": result.move_times.get(opponent_color, 0.0),
         "model_moves": result.move_counts.get(model_color, 0),
         "opponent_moves": result.move_counts.get(opponent_color, 0),
+        "model_temperatures": list(model_temperatures),
         "max_turns": protocol["max_turns"],
         "moves": _serialize_moves(result),
     }
@@ -847,6 +955,7 @@ def evaluate_matchups(
     opponent_factory: Callable[[dict[str, Any], str], Any] = make_opponent,
     play_game_fn: Callable[..., MatchResult] = play_game,
     on_game_completed: Callable[[dict[str, Any]], None] | None = None,
+    on_event: Callable[[str], None] | None = None,
 ) -> int:
     games_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_by_iteration = {entry["iteration"]: entry for entry in entries}
@@ -859,14 +968,42 @@ def evaluate_matchups(
             checkpoint = int(entry["iteration"])
             if selected_checkpoints is not None and checkpoint not in selected_checkpoints:
                 continue
+            checkpoint_has_pending_games = any(
+                (checkpoint, opponent["id"], game_index) not in completed
+                for opponent in protocol["opponents"]
+                for game_index in range(protocol["games_per_opponent"])
+            )
+            if not checkpoint_has_pending_games:
+                continue
             if _sha256(Path(entry["path"])) != entry["sha256"]:
                 raise FixedBasketError(
                     f"checkpoint changed after manifest creation: {checkpoint}"
                 )
             model_bot = model_factory(entry, protocol, board_size)
+            if on_event is not None:
+                on_event(f"Checkpoint model loaded: checkpoint={checkpoint}")
             try:
                 for opponent_spec in protocol["opponents"]:
+                    opponent_has_pending_games = any(
+                        (checkpoint, opponent_spec["id"], game_index) not in completed
+                        for game_index in range(protocol["games_per_opponent"])
+                    )
+                    if not opponent_has_pending_games:
+                        continue
                     opponent_bot = opponent_factory(opponent_spec, "black")
+                    if isinstance(opponent_bot, SeededJSBot):
+                        process = getattr(opponent_bot, "proc", None)
+                        if process is None or process.poll() is not None:
+                            raise FixedBasketError(
+                                f"JS opponent failed to start: {opponent_spec['id']}"
+                            )
+                    if on_event is not None:
+                        on_event(
+                            "Opponent started: "
+                            f"checkpoint={checkpoint} "
+                            f"opponent={opponent_spec['id']} "
+                            f"type={opponent_spec['type']}"
+                        )
                     try:
                         for game_index in range(protocol["games_per_opponent"]):
                             key = (checkpoint, opponent_spec["id"], game_index)
@@ -910,6 +1047,9 @@ def evaluate_matchups(
                                 game_seed=game_seed,
                                 model_color=model_color,
                                 result=result,
+                                model_temperatures=getattr(
+                                    model_bot, "temperature_history", []
+                                ),
                             )
                             encoded = json.dumps(
                                 record,
@@ -926,8 +1066,23 @@ def evaluate_matchups(
                                 on_game_completed(record)
                     finally:
                         _cleanup_bot(opponent_bot)
+                        if isinstance(opponent_bot, SeededJSBot):
+                            process = getattr(opponent_bot, "proc", None)
+                            if process is not None and process.poll() is None:
+                                raise FixedBasketError(
+                                    f"JS opponent failed to exit: {opponent_spec['id']}"
+                                )
+                        if on_event is not None:
+                            on_event(
+                                "Opponent stopped: "
+                                f"checkpoint={checkpoint} "
+                                f"opponent={opponent_spec['id']} "
+                                f"type={opponent_spec['type']}"
+                            )
             finally:
                 _cleanup_bot(model_bot)
+                if on_event is not None:
+                    on_event(f"Checkpoint model released: checkpoint={checkpoint}")
                 del model_bot
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -943,6 +1098,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest: dict[str, Any] | None = None
         try:
             protocol = load_protocol(args.config)
+            protocol = apply_execution_overrides(
+                protocol,
+                mode=args.mode,
+                games_per_opponent=args.games_per_opponent,
+            )
             run_dir = args.run_dir.expanduser().resolve()
             configured = set(protocol["checkpoints"])
             requested = set(args.checkpoints) if args.checkpoints else configured
@@ -953,12 +1113,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for checkpoint in protocol["checkpoints"]
                 if checkpoint in requested
             ]
-            if games_path.exists():
+            existing_manifest = None
+            if games_path.exists() and not args.resume:
+                raise FixedBasketError(
+                    "games.jsonl already exists; pass --resume to continue without "
+                    "duplicating completed games"
+                )
+            if args.resume and not games_path.exists():
+                raise FixedBasketError("--resume requires an existing games.jsonl")
+            if args.resume:
                 existing_manifest = _load_json(manifest_path)
+                expected_games = (
+                    len(selected_order)
+                    * len(protocol["opponents"])
+                    * protocol["games_per_opponent"]
+                )
                 if (
                     existing_manifest.get("protocol_id") != protocol["protocol_id"]
                     or existing_manifest.get("evaluation_mode") != args.mode
                     or existing_manifest.get("selected_checkpoints") != selected_order
+                    or existing_manifest.get("expected_evaluation_games")
+                    != expected_games
                 ):
                     raise FixedBasketError(
                         "existing games.jsonl belongs to a different protocol, mode, "
@@ -972,6 +1147,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 mode=args.mode,
                 selected_checkpoints=selected_order,
             )
+            if existing_manifest is not None:
+                manifest["created_at_utc"] = existing_manifest.get(
+                    "created_at_utc", manifest["created_at_utc"]
+                )
+                manifest["resume_count"] = int(
+                    existing_manifest.get("resume_count", 0)
+                ) + 1
+                manifest["resumed_at_utc"] = datetime.now(timezone.utc).isoformat()
+                if "source_integrity" in existing_manifest:
+                    manifest["source_integrity"] = existing_manifest[
+                        "source_integrity"
+                    ]
             logger.write(
                 f"Evaluation mode: {args.mode}; selected checkpoints: {selected_order}"
             )
@@ -987,6 +1174,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             metadata = _load_json(run_dir / "run_metadata.json")
             board_size = int(metadata["resolved_config"]["model"]["board_size"])
+            source_before = None
+            if args.verify_source_integrity:
+                logger.write(f"Hashing source training directory before run: {run_dir}")
+                source_before = snapshot_directory_hashes(run_dir)
+                manifest["source_integrity"] = {
+                    "status": "before_snapshot_complete",
+                    "root": source_before["root"],
+                    "before_file_count": source_before["file_count"],
+                    "before_tree_sha256": source_before["tree_sha256"],
+                    "files": source_before["files"],
+                }
             manifest["status"] = "running"
             manifest["started_at_utc"] = datetime.now(timezone.utc).isoformat()
             _atomic_write_json(manifest_path, manifest)
@@ -1008,6 +1206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 board_size=board_size,
                 selected_checkpoints=selected_filter,
                 on_game_completed=log_completed_game,
+                on_event=logger.write,
             )
             games_recorded = _count_jsonl_records(games_path)
             if games_recorded != manifest["expected_evaluation_games"]:
@@ -1015,6 +1214,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "games.jsonl count mismatch after evaluation: "
                     f"expected {manifest['expected_evaluation_games']}, "
                     f"found {games_recorded}"
+                )
+            if source_before is not None:
+                logger.write(f"Hashing source training directory after run: {run_dir}")
+                source_after = snapshot_directory_hashes(run_dir)
+                integrity = compare_directory_snapshots(source_before, source_after)
+                integrity["status"] = "passed" if integrity["unchanged"] else "failed"
+                manifest["source_integrity"] = integrity
+                if not integrity["unchanged"]:
+                    raise FixedBasketError(
+                        "source training directory changed during pilot: "
+                        f"{integrity['changed_paths']}"
+                    )
+                logger.write(
+                    "Source training directory integrity: passed; "
+                    f"files={integrity['before_file_count']}"
                 )
             is_full_protocol = requested == configured
             manifest["status"] = (

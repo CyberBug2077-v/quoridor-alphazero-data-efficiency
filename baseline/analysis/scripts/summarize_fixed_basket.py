@@ -264,6 +264,24 @@ def summarize_results(
             record_errors.append("invalid termination")
         if not isinstance(record.get("moves"), list):
             record_errors.append("moves must be a list")
+        temperatures = record.get("model_temperatures")
+        if not isinstance(temperatures, list) or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in temperatures if isinstance(temperatures, list)
+        ):
+            record_errors.append("invalid model temperature history")
+        elif any(
+            float(value)
+            != (
+                float(protocol["model"]["early_temperature"])
+                if index < protocol["model"]["early_temperature_moves_per_player"]
+                else float(protocol["model"]["later_temperature"])
+            )
+            for index, value in enumerate(temperatures)
+        ):
+            record_errors.append("model temperature schedule mismatch")
         for numeric_field in ("turns", "duration_seconds"):
             value = record.get(numeric_field)
             if (
@@ -526,7 +544,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.config is not None
                 else input_dir / "protocol.resolved.yaml"
             )
-            protocol = load_protocol(config_path)
+            protocol = load_protocol(
+                config_path,
+                allow_games_per_opponent_override=args.mode == "pilot",
+            )
             manifest_path = input_dir / "evaluation_manifest.json"
             games_path = input_dir / "games.jsonl"
             manifest = _load_json(manifest_path)
