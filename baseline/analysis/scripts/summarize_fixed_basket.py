@@ -12,6 +12,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import numpy as np
+
 
 BASELINE_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -49,21 +51,40 @@ OPPONENT_SUMMARY_FIELDS = (
 
 CHECKPOINT_SUMMARY_FIELDS = (
     "checkpoint",
-    "games",
-    "opponents",
-    "model_white_games",
-    "model_black_games",
+    "gpu_hours",
+    "total_games",
     "wins",
-    "draws",
     "losses",
-    "score",
-    "macro_score",
-    "mean_turns",
-    "mean_duration_seconds",
-    "faults",
+    "draws",
+    "score_rate",
+    "win_rate",
+    "draw_rate",
+    "heuristic_20_score",
+    "heuristic_200_score",
+    "greedy_random_50_score",
+    "random_score",
+    "mean_game_length",
+    "mean_move_time",
+    "invalid_moves",
+    "bot_errors",
+    "max_turn_draws",
+    "js_invalid_proposals",
+    "model_fallbacks",
+    "score_rate_ci95_low",
+    "score_rate_ci95_high",
+    "bootstrap_iterations",
 )
 
-ELO_SUMMARY_FIELDS = ("participant", "participant_type", "elo")
+ELO_SUMMARY_FIELDS = (
+    "participant",
+    "participant_type",
+    "elo",
+    "status",
+    "fit_scope",
+    "random_seed",
+)
+
+BOOTSTRAP_ITERATIONS = 10_000
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -160,6 +181,44 @@ def _default_elo_calculator(
         k_factor=16.0,
         max_iterations=2000,
     )
+
+
+def _result_score(record: dict[str, Any]) -> float:
+    result = record.get("model_result")
+    return 1.0 if result == "win" else 0.5 if result == "draw" else 0.0
+
+
+def _stratified_score_interval(
+    records: list[dict[str, Any]],
+    *,
+    protocol_id: str,
+    base_seed: int,
+    checkpoint: int,
+    iterations: int = BOOTSTRAP_ITERATIONS,
+) -> tuple[float | None, float | None]:
+    strata: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for record in records:
+        strata[(str(record["opponent"]), str(record["model_color"]))].append(
+            _result_score(record)
+        )
+    if not records or len(strata) != 8 or any(not values for values in strata.values()):
+        return None, None
+    seed = stable_seed(
+        f"{protocol_id}:stratified_bootstrap",
+        checkpoint,
+        "opponent_x_model_color",
+        iterations,
+        base_seed=base_seed,
+    )
+    rng = np.random.default_rng(seed)
+    bootstrap_scores = np.zeros(iterations, dtype=np.float64)
+    total = len(records)
+    for values in strata.values():
+        scores = np.asarray(values, dtype=np.float64)
+        indices = rng.integers(0, len(scores), size=(iterations, len(scores)))
+        bootstrap_scores += scores[indices].sum(axis=1) / total
+    lower, upper = np.quantile(bootstrap_scores, [0.025, 0.975])
+    return float(lower), float(upper)
 
 
 def summarize_results(
@@ -323,7 +382,7 @@ def summarize_results(
     checkpoint_metrics: dict[str, Any] = {}
     elo_games = []
     for checkpoint in expected_checkpoints:
-        opponent_scores = []
+        opponent_scores: dict[str, float] = {}
         checkpoint_group: list[dict[str, Any]] = []
         for opponent_id in opponent_ids:
             group = groups.get((checkpoint, opponent_id), [])
@@ -344,7 +403,7 @@ def summarize_results(
             losses = sum(record.get("model_result") == "loss" for record in group)
             count = len(group)
             score = (wins + 0.5 * draws) / count if count else 0.0
-            opponent_scores.append(score)
+            opponent_scores[opponent_id] = score
             checkpoint_group.extend(group)
             opponent_rows.append(
                 {
@@ -402,48 +461,97 @@ def summarize_results(
             else 0.0
         )
         macro_score = (
-            sum(opponent_scores) / len(opponent_scores) if opponent_scores else 0.0
+            sum(opponent_scores.values()) / len(opponent_scores)
+            if opponent_scores
+            else 0.0
+        )
+        if (
+            checkpoint_games == len(opponent_ids) * games_per_opponent
+            and not math.isclose(checkpoint_score, macro_score, abs_tol=1e-12)
+        ):
+            errors.append(
+                f"checkpoint {checkpoint} direct score and equal-opponent score differ"
+            )
+        gpu_seconds = sum(
+            float(record.get("duration_seconds", 0.0))
+            for record in checkpoint_group
+        )
+        total_model_move_seconds = sum(
+            float(record.get("model_move_seconds", 0.0))
+            for record in checkpoint_group
+        )
+        total_model_moves = sum(
+            int(record.get("model_moves", 0)) for record in checkpoint_group
+        )
+        ci_low, ci_high = _stratified_score_interval(
+            checkpoint_group,
+            protocol_id=protocol["protocol_id"],
+            base_seed=int(protocol["base_seed"]),
+            checkpoint=checkpoint,
         )
         checkpoint_rows.append(
             {
                 "checkpoint": checkpoint,
-                "games": checkpoint_games,
-                "opponents": len(opponent_ids),
-                "model_white_games": sum(
-                    record.get("model_color") == "white" for record in checkpoint_group
-                ),
-                "model_black_games": sum(
-                    record.get("model_color") == "black" for record in checkpoint_group
-                ),
+                "gpu_hours": gpu_seconds / 3600.0,
+                "total_games": checkpoint_games,
                 "wins": checkpoint_wins,
-                "draws": checkpoint_draws,
                 "losses": checkpoint_losses,
-                "score": checkpoint_score,
-                "macro_score": macro_score,
-                "mean_turns": (
+                "draws": checkpoint_draws,
+                "score_rate": checkpoint_score,
+                "win_rate": (
+                    checkpoint_wins / checkpoint_games if checkpoint_games else 0.0
+                ),
+                "draw_rate": (
+                    checkpoint_draws / checkpoint_games if checkpoint_games else 0.0
+                ),
+                "heuristic_20_score": opponent_scores.get("heuristic_20", 0.0),
+                "heuristic_200_score": opponent_scores.get("heuristic_200", 0.0),
+                "greedy_random_50_score": opponent_scores.get(
+                    "greedy_random_50", 0.0
+                ),
+                "random_score": opponent_scores.get("random", 0.0),
+                "mean_game_length": (
                     sum(float(record.get("turns", 0)) for record in checkpoint_group)
                     / checkpoint_games
                     if checkpoint_games
                     else 0.0
                 ),
-                "mean_duration_seconds": (
-                    sum(
-                        float(record.get("duration_seconds", 0.0))
-                        for record in checkpoint_group
-                    )
-                    / checkpoint_games
-                    if checkpoint_games
+                "mean_move_time": (
+                    total_model_move_seconds / total_model_moves
+                    if total_model_moves
                     else 0.0
                 ),
-                "faults": sum(
-                    record.get("fault") is not None for record in checkpoint_group
+                "invalid_moves": sum(
+                    record.get("termination") == "invalid_move"
+                    for record in checkpoint_group
                 ),
+                "bot_errors": sum(
+                    record.get("termination") == "bot_error"
+                    for record in checkpoint_group
+                ),
+                "max_turn_draws": sum(
+                    record.get("termination") == "max_turns"
+                    and record.get("model_result") == "draw"
+                    for record in checkpoint_group
+                ),
+                "js_invalid_proposals": sum(
+                    int(record.get("opponent_invalid_proposals", 0))
+                    for record in checkpoint_group
+                ),
+                "model_fallbacks": sum(
+                    int(record.get("model_fallback_count", 0))
+                    for record in checkpoint_group
+                ),
+                "score_rate_ci95_low": ci_low,
+                "score_rate_ci95_high": ci_high,
+                "bootstrap_iterations": BOOTSTRAP_ITERATIONS,
             }
         )
         checkpoint_metrics[str(checkpoint)] = {
-            "games": checkpoint_games,
-            "score": checkpoint_score,
-            "macro_score": macro_score,
+            "total_games": checkpoint_games,
+            "score_rate": checkpoint_score,
+            "equal_opponent_score_rate": macro_score,
+            "score_rate_ci95": [ci_low, ci_high],
         }
 
     if invalid_records:
@@ -471,11 +579,66 @@ def summarize_results(
         "expected_model_games_per_side": games_per_side,
         "max_turns": protocol["max_turns"],
         "checkpoint_metrics": checkpoint_metrics,
-        "elo_ratings": dict(sorted(elo_ratings.items())),
+        "metric_definitions": {
+            "gpu_hours": "sum(duration_seconds) / 3600; one GPU used serially",
+            "score_rate": "(wins + 0.5 * draws) / total_games",
+            "fixed_basket_score": (
+                "equal-weight mean of the four opponent scores; identical to the "
+                "pooled score because every opponent contributes the same game count"
+            ),
+            "mean_game_length": "mean(turns)",
+            "mean_move_time": "sum(model_move_seconds) / sum(model_moves)",
+            "max_turn_draws": (
+                "games with termination=max_turns and model_result=draw"
+            ),
+            "js_invalid_proposals": (
+                "illegal raw JS proposals rejected before arena play; these are "
+                "reported separately from game-level invalid_move terminations"
+            ),
+            "model_fallbacks": (
+                "arena-legal deterministic model fallbacks after the AlphaZero "
+                "policy cannot map positive mass to a legal pyquoridor move"
+            ),
+        },
+        "confidence_intervals": {
+            "method": "nonparametric stratified bootstrap",
+            "strata": ["opponent", "model_color"],
+            "confidence_level": 0.95,
+            "iterations": BOOTSTRAP_ITERATIONS,
+            "seed_derivation": (
+                "first 32 bits of SHA-256 using protocol, checkpoint, stratum label, "
+                "iteration count, and base_seed"
+            ),
+        },
+        "elo": {
+            "status": "provisional" if mode == "formal" else "not_computed",
+            "random_seed": int(protocol["base_seed"]),
+            "fit_scope": "baseline checkpoints and fixed opponents",
+            "ratings": dict(sorted(elo_ratings.items())),
+            "finalization_note": (
+                "After Adaptive evaluation, jointly fit Baseline checkpoints, "
+                "Adaptive checkpoints, and fixed opponents in one final Elo model."
+            ),
+        },
         "data_quality": {
             "unique_game_keys": len(seen_keys),
             "invalid_records": invalid_records,
             "faults": faults,
+            "termination_counts": dict(
+                sorted(
+                    (termination, sum(record.get("termination") == termination for record in games))
+                    for termination in {
+                        str(record.get("termination")) for record in games
+                    }
+                )
+            ),
+            "js_invalid_proposals": sum(
+                int(record.get("opponent_invalid_proposals", 0))
+                for record in games
+            ),
+            "model_fallbacks": sum(
+                int(record.get("model_fallback_count", 0)) for record in games
+            ),
             "errors": errors,
             "invalid_record_details": invalid_record_details,
         },
@@ -500,6 +663,9 @@ def summarize_results(
                     "checkpoint" if participant.startswith("checkpoint_") else "opponent"
                 ),
                 "elo": rating,
+                "status": "provisional",
+                "fit_scope": "baseline checkpoints and fixed opponents",
+                "random_seed": int(protocol["base_seed"]),
             }
             for participant, rating in sorted(elo_ratings.items())
         ]

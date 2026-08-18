@@ -23,6 +23,9 @@ def load_script(name: str):
 evaluate = load_script("evaluate_fixed_basket")
 summarize = load_script("summarize_fixed_basket")
 
+from arena.bot_interface import PawnMove
+from pyquoridor.board import Board
+
 
 def formal_protocol() -> dict:
     return evaluate.load_protocol(
@@ -403,6 +406,8 @@ def test_summarizer_requires_50_games_and_25_per_side(tmp_path: Path) -> None:
                         "turns": 20,
                         "total_moves": 20,
                         "duration_seconds": 1.0,
+                        "model_move_seconds": 1.0,
+                        "model_moves": 10,
                         "fault": None,
                         "moves": [],
                         "model_temperatures": [0.18] * 5 + [0.0],
@@ -431,6 +436,9 @@ def test_summarizer_requires_50_games_and_25_per_side(tmp_path: Path) -> None:
         "unique_game_keys": 2400,
         "invalid_records": 0,
         "faults": 0,
+        "termination_counts": {"win": 2400},
+        "js_invalid_proposals": 0,
+        "model_fallbacks": 0,
         "errors": [],
         "invalid_record_details": [],
     }
@@ -452,12 +460,48 @@ def test_summarizer_requires_50_games_and_25_per_side(tmp_path: Path) -> None:
         )
     )
     assert len(checkpoint_rows) == 12
-    assert all(int(row["games"]) == 200 for row in checkpoint_rows)
-    assert all(int(row["model_white_games"]) == 100 for row in checkpoint_rows)
-    assert all(int(row["model_black_games"]) == 100 for row in checkpoint_rows)
+    required_checkpoint_fields = {
+        "checkpoint",
+        "gpu_hours",
+        "total_games",
+        "wins",
+        "losses",
+        "draws",
+        "score_rate",
+        "win_rate",
+        "draw_rate",
+        "heuristic_20_score",
+        "heuristic_200_score",
+        "greedy_random_50_score",
+        "random_score",
+        "mean_game_length",
+        "mean_move_time",
+        "invalid_moves",
+        "bot_errors",
+        "max_turn_draws",
+        "js_invalid_proposals",
+        "model_fallbacks",
+    }
+    assert all(required_checkpoint_fields <= row.keys() for row in checkpoint_rows)
+    assert all(int(row["total_games"]) == 200 for row in checkpoint_rows)
+    assert all(int(row["wins"]) == 100 for row in checkpoint_rows)
+    assert all(int(row["losses"]) == 100 for row in checkpoint_rows)
+    assert all(float(row["score_rate"]) == pytest.approx(0.5) for row in checkpoint_rows)
+    assert all(float(row["mean_move_time"]) == pytest.approx(0.1) for row in checkpoint_rows)
+    assert all(
+        float(row["score_rate_ci95_low"]) <= 0.5 <= float(row["score_rate_ci95_high"])
+        for row in checkpoint_rows
+    )
     assert len(opponent_rows) == 48
     assert all(int(row["games"]) == 50 for row in opponent_rows)
     assert len(elo_rows) == 16
+    assert all(row["status"] == "provisional" for row in elo_rows)
+    assert all(int(row["random_seed"]) == 1001 for row in elo_rows)
+    assert summary["elo"]["status"] == "provisional"
+    assert summary["confidence_intervals"]["strata"] == [
+        "opponent",
+        "model_color",
+    ]
 
 
 def test_pilot_summary_is_isolated_and_only_writes_checkpoint_csv(
@@ -542,3 +586,115 @@ def test_seeded_js_bridge_requires_an_explicit_uint32_seed() -> None:
     assert "Number.isInteger(seed)" in source
     assert "Math.random = mulberry32(seed)" in source
     assert "Math.random = originalRandom" in source
+
+
+def test_seeded_js_bot_rejects_illegal_proposals_deterministically(
+    monkeypatch,
+) -> None:
+    proposals = iter(
+        [
+            PawnMove("white", (8, 8)),
+            PawnMove("white", (1, 4)),
+        ]
+    )
+    monkeypatch.setattr(
+        evaluate.JSBot,
+        "select_move",
+        lambda self, board: next(proposals),
+    )
+    bot = object.__new__(evaluate.SeededJSBot)
+    bot.color = "white"
+    bot.invalid_proposals = 0
+
+    selected = bot.select_move(Board())
+
+    assert selected.target == (1, 4)
+    assert bot.invalid_proposals == 1
+
+
+def test_retryable_termination_records_are_atomically_removed(tmp_path: Path) -> None:
+    games_path = tmp_path / "games.jsonl"
+    records = [
+        {
+            "checkpoint": 0,
+            "opponent": "heuristic_200",
+            "game_index": 49,
+            "termination": "invalid_move",
+        },
+        {
+            "checkpoint": 0,
+            "opponent": "random",
+            "game_index": 0,
+            "termination": "win",
+        },
+    ]
+    games_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    removed = evaluate.remove_retryable_game_records(
+        games_path, {"invalid_move"}
+    )
+    remaining = [json.loads(line) for line in games_path.read_text().splitlines()]
+
+    assert removed == [(0, "heuristic_200", 49)]
+    assert remaining == [records[1]]
+
+
+def test_fixed_basket_model_fallback_diagnostics_are_json_safe() -> None:
+    bot = object.__new__(evaluate.ScheduledTemperatureAlphaZeroBot)
+    bot.color = "black"
+    bot.fallback_events = []
+
+    bot._log_fallback_debug(
+        Board(),
+        object(),
+        -1,
+        [0.5, 0.5],
+        __import__("numpy").array([1, 0], dtype=__import__("numpy").int64),
+        {},
+        ({}, {}),
+        [(int(1), __import__("numpy").float64(0.5), "invalid")],
+    )
+
+    assert bot.fallback_events == [
+        {
+            "model_color": "black",
+            "player": -1,
+            "failed_actions": 1,
+            "alphazero_valid_actions": 1,
+            "reason": "all_policy_actions_failed_arena_legality",
+        }
+    ]
+    json.dumps(bot.fallback_events, allow_nan=False)
+
+
+def test_selected_game_records_are_atomically_removed_and_normalized(
+    tmp_path: Path,
+) -> None:
+    games_path = tmp_path / "games.jsonl"
+    records = [
+        {"checkpoint": 60, "opponent": "heuristic_200", "game_index": 41},
+        {"checkpoint": 210, "opponent": "heuristic_200", "game_index": 2},
+        {"checkpoint": 210, "opponent": "random", "game_index": 0},
+    ]
+    games_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    keys = evaluate.parse_retry_game_keys(
+        ["60:heuristic_200:41", "210:heuristic_200:2"]
+    )
+    removed = evaluate.remove_selected_game_records(games_path, keys)
+    remaining = [json.loads(line) for line in games_path.read_text().splitlines()]
+
+    assert removed == [(60, "heuristic_200", 41), (210, "heuristic_200", 2)]
+    assert remaining == [
+        {
+            **records[2],
+            "model_fallback_count": 0,
+            "model_fallback_events": [],
+        }
+    ]

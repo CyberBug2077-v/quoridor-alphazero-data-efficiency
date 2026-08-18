@@ -20,13 +20,14 @@ BASELINE_ROOT = Path(__file__).resolve().parents[2]
 if str(BASELINE_ROOT) not in sys.path:
     sys.path.insert(0, str(BASELINE_ROOT))
 
-from arena.arena import MatchResult, _prep_bot, play_game
+from arena.arena import MatchResult, _prep_bot, _validate_move, play_game
 from arena.bot_alphazero import AlphaZeroBot
 from arena.bot_greedy import GreedyBot
 from arena.bot_js_mcts import JSBot
 from arena.bot_random import RandomBot
 from arena.bot_random_greedy import RandomGreedyBot
 from pyquoridor.board import Board
+from pyquoridor.exceptions import InvalidFence, InvalidMove
 
 
 DEFAULT_CONFIG = BASELINE_ROOT / "analysis" / "configs" / "fixed_basket_v1.yaml"
@@ -108,6 +109,7 @@ class ScheduledTemperatureAlphaZeroBot(AlphaZeroBot):
         self.early_moves = early_moves
         self.later_temp = later_temp
         self.temperature_history = []
+        self.fallback_events = []
 
     def select_move(self, board):
         self.temp = (
@@ -117,6 +119,40 @@ class ScheduledTemperatureAlphaZeroBot(AlphaZeroBot):
         )
         self.temperature_history.append(self.temp)
         return super().select_move(board)
+
+    def _log_fallback_debug(
+        self,
+        board,
+        az_board,
+        player,
+        probs,
+        valid_moves,
+        legal_pawn_moves,
+        legal_fence_moves,
+        failed_actions,
+    ):
+        """Record fallback diagnostics without serializing raw board state.
+
+        The shared arena implementation writes a debug JSONL entry containing
+        values supplied by NumPy.  Some late-game states include ``np.int64``
+        coordinates, which can make that diagnostic write raise and incorrectly
+        divert an otherwise valid MCTS selection into the raw-policy path.  The
+        fixed-basket protocol keeps compact, JSON-safe per-game diagnostics
+        instead and leaves the shared sanity-evaluation implementation untouched.
+        """
+        self.fallback_events.append(
+            {
+                "model_color": self.color,
+                "player": int(player),
+                "failed_actions": int(len(failed_actions)),
+                "alphazero_valid_actions": int(np.sum(valid_moves)),
+                "reason": (
+                    "all_policy_actions_failed_arena_legality"
+                    if failed_actions
+                    else "no_policy_mass_on_arena_legal_actions"
+                ),
+            }
+        )
 
 
 def stable_seed(
@@ -144,16 +180,39 @@ def _request_seed(game_seed: int, request_index: int) -> int:
 class SeededJSBot(JSBot):
     """JSBot transport that supplies one deterministic uint32 seed per move."""
 
+    MAX_INVALID_PROPOSAL_RETRIES = 32
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._game_seed: int | None = None
         self._request_index = 0
+        self.invalid_proposals = 0
 
     def set_game_seed(self, seed: int) -> None:
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 0xFFFFFFFF:
             raise FixedBasketError("JS game seed must be a uint32")
         self._game_seed = seed
         self._request_index = 0
+        self.invalid_proposals = 0
+
+    def select_move(self, board: Board):
+        for _ in range(self.MAX_INVALID_PROPOSAL_RETRIES + 1):
+            move = super().select_move(board)
+            legal_pawn_moves, legal_fence_moves = board.legal_moves(player=self.color)
+            try:
+                _validate_move(
+                    self.color,
+                    move,
+                    legal_pawn_moves,
+                    legal_fence_moves,
+                )
+            except (InvalidMove, InvalidFence):
+                self.invalid_proposals += 1
+                continue
+            return move
+        raise FixedBasketError(
+            "seeded JS opponent exceeded the invalid-proposal retry limit"
+        )
 
     def _writeln(self, obj):
         if self._game_seed is None:
@@ -207,6 +266,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--resume",
         action="store_true",
         help="Resume a compatible games.jsonl and skip completed game keys.",
+    )
+    parser.add_argument(
+        "--retry-termination",
+        action="append",
+        choices=("invalid_move", "bot_error"),
+        default=[],
+        help="With --resume, remove and replay records with this termination.",
+    )
+    parser.add_argument(
+        "--retry-game",
+        action="append",
+        default=[],
+        metavar="CHECKPOINT:OPPONENT:GAME_INDEX",
+        help="With --resume, remove and replay one stable game key.",
     )
     parser.add_argument(
         "--verify-source-integrity",
@@ -627,6 +700,24 @@ def build_evaluation_manifest(
             "alpha_zero_black_games_per_opponent": protocol["games_per_opponent"] // 2,
         },
         "max_turns": protocol["max_turns"],
+        "js_move_legality_policy": {
+            "validation": "arena._validate_move against the current board",
+            "on_invalid_proposal": (
+                "reject and deterministically request the next seeded JS proposal"
+            ),
+            "max_retries": SeededJSBot.MAX_INVALID_PROPOSAL_RETRIES,
+            "record_field": "opponent_invalid_proposals",
+        },
+        "model_fallback_policy": {
+            "scope": "ScheduledTemperatureAlphaZeroBot only",
+            "shared_arena_modified": False,
+            "raw_state_persisted": False,
+            "record_fields": ["model_fallback_count", "model_fallback_events"],
+            "interpretation": (
+                "arena-legal deterministic fallback after AlphaZero policy actions "
+                "cannot be mapped to a legal pyquoridor move"
+            ),
+        },
         "outputs": {
             "protocol_resolved": resolved_protocol_path.as_posix(),
             "evaluation_manifest": (output_dir / "evaluation_manifest.json").as_posix(),
@@ -752,6 +843,8 @@ def _prepare_bot(bot: Any, color: str) -> Any:
     prepared = _prep_bot(bot, color)
     if hasattr(prepared, "temperature_history"):
         prepared.temperature_history = []
+    if hasattr(prepared, "fallback_events"):
+        prepared.fallback_events = []
     for child_name in ("_random", "_greedy"):
         child = getattr(prepared, child_name, None)
         if child is not None:
@@ -833,6 +926,8 @@ def _game_record(
     model_color: str,
     result: MatchResult,
     model_temperatures: Sequence[float],
+    opponent_invalid_proposals: int,
+    model_fallback_events: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     opponent_color = "black" if model_color == "white" else "white"
     return {
@@ -858,6 +953,9 @@ def _game_record(
         "opponent_move_seconds": result.move_times.get(opponent_color, 0.0),
         "model_moves": result.move_counts.get(model_color, 0),
         "opponent_moves": result.move_counts.get(opponent_color, 0),
+        "opponent_invalid_proposals": opponent_invalid_proposals,
+        "model_fallback_count": len(model_fallback_events),
+        "model_fallback_events": list(model_fallback_events),
         "model_temperatures": list(model_temperatures),
         "max_turns": protocol["max_turns"],
         "moves": _serialize_moves(result),
@@ -942,6 +1040,129 @@ def _count_jsonl_records(path: Path) -> int:
         return 0
     with path.open("r", encoding="utf-8") as source:
         return sum(1 for line in source if line.strip())
+
+
+def remove_retryable_game_records(
+    games_path: Path, terminations: set[str]
+) -> list[tuple[int, str, int]]:
+    if not terminations:
+        return []
+    kept_lines = []
+    removed_keys = []
+    with games_path.open("r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise FixedBasketError(
+                    f"invalid games JSONL line {line_number}: {exc}"
+                ) from exc
+            if record.get("termination") in terminations:
+                removed_keys.append(
+                    (
+                        int(record["checkpoint"]),
+                        str(record["opponent"]),
+                        int(record["game_index"]),
+                    )
+                )
+            else:
+                kept_lines.append(
+                    json.dumps(
+                        record,
+                        sort_keys=True,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                )
+    temporary = games_path.with_name(f".{games_path.name}.{os.getpid()}.retry.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as destination:
+            for line in kept_lines:
+                destination.write(line + "\n")
+            destination.flush()
+            os.fsync(destination.fileno())
+        temporary.replace(games_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return removed_keys
+
+
+def parse_retry_game_keys(values: Sequence[str]) -> set[tuple[int, str, int]]:
+    keys: set[tuple[int, str, int]] = set()
+    for value in values:
+        parts = value.split(":")
+        if len(parts) != 3:
+            raise FixedBasketError(
+                "--retry-game must use CHECKPOINT:OPPONENT:GAME_INDEX"
+            )
+        try:
+            key = (int(parts[0]), parts[1], int(parts[2]))
+        except ValueError as exc:
+            raise FixedBasketError(
+                "--retry-game checkpoint and game index must be integers"
+            ) from exc
+        if not key[1] or key[0] < 0 or key[2] < 0:
+            raise FixedBasketError(f"invalid --retry-game key: {value}")
+        keys.add(key)
+    return keys
+
+
+def remove_selected_game_records(
+    games_path: Path, keys: set[tuple[int, str, int]]
+) -> list[tuple[int, str, int]]:
+    if not keys:
+        return []
+    kept_records = []
+    removed_keys = []
+    with games_path.open("r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise FixedBasketError(
+                    f"invalid games JSONL line {line_number}: {exc}"
+                ) from exc
+            key = (
+                int(record["checkpoint"]),
+                str(record["opponent"]),
+                int(record["game_index"]),
+            )
+            if key in keys:
+                removed_keys.append(key)
+                continue
+            # Normalize diagnostics introduced after a long-running resume so
+            # every retained formal record has the same explicit schema.
+            record.setdefault("model_fallback_count", 0)
+            record.setdefault("model_fallback_events", [])
+            kept_records.append(record)
+    missing = keys - set(removed_keys)
+    if missing:
+        raise FixedBasketError(
+            f"--retry-game keys were not present in games.jsonl: {sorted(missing)}"
+        )
+    temporary = games_path.with_name(f".{games_path.name}.{os.getpid()}.retry.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as destination:
+            for record in kept_records:
+                destination.write(
+                    json.dumps(
+                        record,
+                        sort_keys=True,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+            destination.flush()
+            os.fsync(destination.fileno())
+        temporary.replace(games_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return sorted(removed_keys)
 
 
 def evaluate_matchups(
@@ -1050,6 +1271,12 @@ def evaluate_matchups(
                                 model_temperatures=getattr(
                                     model_bot, "temperature_history", []
                                 ),
+                                opponent_invalid_proposals=int(
+                                    getattr(opponent_bot, "invalid_proposals", 0)
+                                ),
+                                model_fallback_events=getattr(
+                                    model_bot, "fallback_events", []
+                                ),
                             )
                             encoded = json.dumps(
                                 record,
@@ -1121,6 +1348,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             if args.resume and not games_path.exists():
                 raise FixedBasketError("--resume requires an existing games.jsonl")
+            if (args.retry_termination or args.retry_game) and not args.resume:
+                raise FixedBasketError(
+                    "--retry-termination and --retry-game require --resume"
+                )
             if args.resume:
                 existing_manifest = _load_json(manifest_path)
                 expected_games = (
@@ -1138,6 +1369,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise FixedBasketError(
                         "existing games.jsonl belongs to a different protocol, mode, "
                         "or checkpoint selection"
+                    )
+                removed_keys = remove_retryable_game_records(
+                    games_path, set(args.retry_termination)
+                )
+                if removed_keys:
+                    logger.write(
+                        "Removed retryable game records: "
+                        + ", ".join(str(key) for key in removed_keys)
+                    )
+                selected_retry_keys = parse_retry_game_keys(args.retry_game)
+                selected_removed_keys = remove_selected_game_records(
+                    games_path, selected_retry_keys
+                )
+                if selected_removed_keys:
+                    logger.write(
+                        "Removed explicitly selected game records: "
+                        + ", ".join(str(key) for key in selected_removed_keys)
                     )
             write_resolved_protocol(protocol, output_dir)
             manifest = build_evaluation_manifest(
