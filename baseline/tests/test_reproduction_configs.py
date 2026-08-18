@@ -218,3 +218,74 @@ def test_every_config_has_standard_logging_files() -> None:
         if name == "pretraining_reproduction.yaml":
             expected_for_config["metrics_file"] = "pretraining_metrics.jsonl"
         assert {key: logging[key] for key in expected_for_config} == expected_for_config
+
+
+def test_baseline_gate2_analysis_protocol_is_frozen() -> None:
+    path = BASELINE_ROOT / "analysis" / "configs" / "baseline_gate2.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(config, dict)
+
+    assert config["analysis"]["input_run_id"] == (
+        "baseline_reproduction_seed1001_4090"
+    )
+    assert config["checkpoints"]["iterations"] == [
+        0,
+        20,
+        40,
+        60,
+        80,
+        100,
+        120,
+        140,
+        160,
+        180,
+        200,
+        210,
+    ]
+    assert config["replay"]["history_iterations"] == 150
+    assert config["state_hash"]["definition"] == (
+        "SHA256(dtype + shape + contiguous canonical-board bytes)"
+    )
+
+    basket = config["fixed_basket"]
+    assert basket["games_per_opponent"] == 40
+    assert [opponent["id"] for opponent in basket["opponents"]] == [
+        "random",
+        "greedy",
+        "random_greedy",
+    ]
+    assert all(opponent["games"] == 40 for opponent in basket["opponents"])
+
+    assert config["holdout"]["seed"] == 71001
+    assert config["holdout"]["games"] == 200
+    assert config["plateau"]["method"] == (
+        "rolling_ols_slope_with_paired_stratified_bootstrap"
+    )
+    assert config["outputs"]["root"] == (
+        "outputs/baseline_reproduction_seed1001_4090/gate2"
+    )
+    assert config["outputs"]["derived_metrics"].endswith("/derived_metrics.csv")
+    assert config["outputs"]["baseline_resource_summary"].endswith(
+        "/baseline_resource_summary.json"
+    )
+    assert config["outputs"]["data_quality_report"].endswith(
+        "/data_quality_report.json"
+    )
+    assert config["baseline_metrics"]["buffer_fraction_consumed"] == (
+        "examples_used / replay_buffer_size"
+    )
+    assert config["baseline_metrics"]["mean_sample_exposure"] == (
+        "samples_seen / replay_buffer_size"
+    )
+    assert config["baseline_metrics"]["selected_sample_reuse"] == (
+        "samples_seen / examples_used"
+    )
+    assert config["outputs"]["replay_iteration_metrics"] == (
+        "outputs/baseline_seed1001_4090_analysis/replay/replay_iteration_stats.csv"
+    )
+    assert config["outputs"]["replay_summary"] == (
+        "outputs/baseline_seed1001_4090_analysis/replay/replay_final_summary.json"
+    )
+    assert config["outputs"]["trajectory_stats"] == (
+        "outputs/baseline_seed1001_4090_analysis/replay/trajectory_stats.csv"
+    )

@@ -1,0 +1,49 @@
+schema_version: 1
+protocol_id: fixed_basket_v1
+
+base_seed: 1001
+
+checkpoints:
+  - 0
+  - 20
+  - 40
+  - 60
+  - 80
+  - 100
+  - 120
+  - 140
+  - 160
+  - 180
+  - 200
+  - 210
+
+games_per_opponent: 50
+max_turns: 150
+alternate_sides: true
+
+model:
+  use_mcts: true
+  num_mcts_sims: 200
+  eval_mcts_in_batch: 4
+  cpuct: 1.25
+  clear_tree_each_move: true
+  early_temperature: 0.18
+  early_temperature_moves_per_player: 5
+  later_temperature: 0.0
+  dirichlet_noise: false
+
+opponents:
+  - id: heuristic_20
+    type: js_mcts
+    rollouts: 20
+
+  - id: heuristic_200
+    type: js_mcts
+    rollouts: 200
+
+  - id: greedy_random_50
+    type: random_greedy
+    greedy_probability: 0.5
+
+  - id: random
+    type: random
