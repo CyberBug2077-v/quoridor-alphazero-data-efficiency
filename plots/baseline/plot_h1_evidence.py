@@ -323,8 +323,9 @@ def _shade_time_context(
         zorder=3,
     )
     if label_onset:
+        onset_label_x = onset_x + 0.006 * (final_x - min(lookup.values()))
         ax.text(
-            onset_x,
+            onset_label_x,
             0.985,
             f"Detected plateau onset: ckpt {onset_checkpoint}",
             transform=ax.get_xaxis_transform(),
@@ -332,7 +333,7 @@ def _shade_time_context(
             rotation_mode="anchor",
             ha="right",
             va="top",
-            fontsize=8.5,
+            fontsize=7.8,
             color=CHARCOAL,
         )
     if label_confirmation:
@@ -374,15 +375,16 @@ def annotate_max_drawdown(
         raise ValueError("Expected one maximum-drawdown peak and one trough")
     peak, trough = peaks[0], troughs[0]
     change = float(trough["score"]) - float(peak["score"])
+    bracket_x = float(trough["gpu_hours"]) + 0.45
     ax.annotate(
         "",
-        xy=(trough["gpu_hours"], trough["score"]),
-        xytext=(peak["gpu_hours"], peak["score"]),
+        xy=(bracket_x, trough["score"]),
+        xytext=(bracket_x, peak["score"]),
         arrowprops={
-            "arrowstyle": "-|>",
+            "arrowstyle": "|-|",
             "color": MID_GREY,
-            "linewidth": 1.25,
-            "connectionstyle": "arc3,rad=0.10",
+            "linewidth": 0.85,
+            "linestyle": (0, (3, 2.5)),
         },
         zorder=5,
     )
@@ -464,7 +466,8 @@ def plot_baseline_strength(
             0.975,
             0.825,
             (
-                f"Maximum drawdown = \N{MINUS SIGN}{abs(drawdown):.3f} score  ·  "
+                "Observed maximum drawdown = "
+                f"\N{MINUS SIGN}{abs(drawdown):.3f}  ·  "
                 f"ckpt {drawdown_peak} → {drawdown_trough}"
             ),
             fontsize=8.8,
@@ -545,6 +548,7 @@ def _plot_pre_post_series(
     marker: str = "o",
     linestyle: str = "-",
     linewidth: float = 1.15,
+    connect_pre: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     pre = [point for point in points if point["is_at_or_before_plateau"]]
     post = [point for point in points if point["is_after_plateau"]]
@@ -553,7 +557,7 @@ def _plot_pre_post_series(
             [point["x"] for point in pre],
             [point["value"] for point in pre],
             color=pre_color,
-            linestyle=linestyle,
+            linestyle=linestyle if connect_pre else "None",
             linewidth=linewidth,
             marker=marker,
             markersize=3.4,
@@ -589,6 +593,7 @@ def _add_descriptive_fit(
     effect: dict[str, Any],
     *,
     color: str,
+    show_annotation: bool = True,
 ) -> None:
     used = [point for point in points if point["used_in_h1_trend"]]
     if len(used) < 4 or effect.get("availability_status") != "available":
@@ -606,17 +611,18 @@ def _add_descriptive_fit(
         linestyle=(0, (6, 3)),
         zorder=6,
     )
-    sign = ">" if slope > 0 else "<" if slope < 0 else "="
-    ax.text(
-        0.985,
-        0.08,
-        f"pre-onset descriptive OLS (n={len(used)}): β {sign} 0",
-        transform=ax.transAxes,
-        ha="right",
-        va="bottom",
-        fontsize=8.2,
-        color=color,
-    )
+    if show_annotation:
+        sign = ">" if slope > 0 else "<" if slope < 0 else "="
+        ax.text(
+            0.985,
+            0.08,
+            f"eligible descriptive OLS (n={len(used)}): β {sign} 0",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8.2,
+            color=color,
+        )
 
 
 def _status_box(
@@ -625,13 +631,14 @@ def _status_box(
     *,
     x: float = 0.985,
     y: float = 0.94,
+    ha: str = "right",
 ) -> None:
     ax.text(
         x,
         y,
         text,
         transform=ax.transAxes,
-        ha="right",
+        ha=ha,
         va="top",
         fontsize=8.1,
         color=CHARCOAL,
@@ -647,6 +654,89 @@ def _status_box(
     )
 
 
+def _plot_supply_inset(
+    ax: Axes,
+    points: Sequence[dict[str, Any]],
+    aligned: Sequence[dict[str, Any]],
+    plateau: dict[str, Any],
+) -> None:
+    """Magnify the low-valued supply observations around plateau onset."""
+    checkpoint_gpu = _checkpoint_gpu_lookup(aligned)
+    onset_checkpoint = int(plateau["plateau_start_checkpoint"])
+    onset_x = _checkpoint_x(onset_checkpoint, checkpoint_gpu, "plateau onset")
+    inset = ax.inset_axes([0.42, 0.43, 0.27, 0.31], zorder=12)
+    inset.set_facecolor("white")
+    inset.axvspan(onset_x, 5.0, color=POST_ONSET_GREY, zorder=-5)
+    inset.axvline(
+        onset_x,
+        color=CHARCOAL,
+        linestyle=(0, (4, 3)),
+        linewidth=0.8,
+        zorder=3,
+    )
+    _plot_pre_post_series(
+        inset,
+        points,
+        label="_nolegend_",
+        post_label="_nolegend_",
+        pre_color=DEEP_BLUE,
+        post_color=LIGHT_BLUE,
+        marker="o",
+        linewidth=0.8,
+    )
+    inset.set_xlim(1.0, 5.0)
+    inset.set_ylim(0.0, 100.0)
+    inset.set_title(
+        "Local view (1–5 GPU-h; 0–100)",
+        loc="left",
+        fontsize=6.9,
+        pad=3,
+    )
+    inset.text(
+        onset_x + 0.05,
+        0.985,
+        f"ckpt {onset_checkpoint}",
+        transform=inset.get_xaxis_transform(),
+        fontsize=6.4,
+        color=CHARCOAL,
+        va="top",
+    )
+    _style_axis(inset)
+    inset.tick_params(axis="both", labelsize=6.3, length=2.5)
+
+
+def _plot_turnover_inset(
+    ax: Axes,
+    turnover: Sequence[dict[str, Any]],
+) -> None:
+    """Magnify the small post-onset turnover fractions."""
+    if not turnover:
+        return
+    inset = ax.inset_axes([0.42, 0.08, 0.25, 0.28], zorder=12)
+    inset.set_facecolor("white")
+    _plot_post_onset_only(
+        inset,
+        turnover,
+        label="_nolegend_",
+        marker="s",
+        linestyle="--",
+    )
+    inset.set_xlim(
+        min(point["x"] for point in turnover) - 0.25,
+        max(point["x"] for point in turnover) + 0.20,
+    )
+    inset.set_ylim(0.0, 0.02)
+    inset.set_yticks((0.0, 0.01, 0.02))
+    inset.set_title(
+        "Turnover detail (0–0.02)",
+        loc="left",
+        fontsize=6.9,
+        pad=3,
+    )
+    _style_axis(inset)
+    inset.tick_params(axis="both", labelsize=6.3, length=2.5)
+
+
 def _plot_strength_panel(
     ax: Axes,
     rows: Sequence[dict[str, Any]],
@@ -655,7 +745,7 @@ def _plot_strength_panel(
     pre = [row for row in rows if row["checkpoint"] <= onset_checkpoint]
     post = [row for row in rows if row["checkpoint"] > onset_checkpoint]
     for subset, color, filled, label in (
-        (pre, DEEP_BLUE, True, "At or before onset"),
+        (pre, DEEP_BLUE, True, "Eligible (ckpt ≤ 40)"),
         (post, LIGHT_BLUE, False, "Post-onset description"),
     ):
         scores = np.asarray([row["score"] for row in subset], dtype=float)
@@ -785,19 +875,14 @@ def plot_temporally_aligned_diagnostics(
         supply = _metric_points(
             diagnostics, "fresh_states_per_update", checkpoint_gpu
         )
-        _plot_pre_post_series(
+        eligible_supply, _ = _plot_pre_post_series(
             ax_b,
             supply,
-            label="Fresh states / update",
+            label="Eligible (ckpt ≤ 40)",
+            post_label="Post-onset continuation",
             pre_color=DEEP_BLUE,
             post_color=LIGHT_BLUE,
             marker="o",
-        )
-        _add_descriptive_fit(
-            ax_b,
-            supply,
-            effects["fresh_states_per_update"],
-            color=CHARCOAL,
         )
         ax_b.set_ylim(bottom=0)
         ax_b.set_title(
@@ -808,7 +893,13 @@ def plot_temporally_aligned_diagnostics(
             pad=6,
         )
         ax_b.set_ylabel("Fresh states\nper update", fontsize=9.2)
-        _status_box(ax_b, "Pre-onset trend assessable")
+        _status_box(
+            ax_b,
+            (
+                f"Eligible observations (ckpt ≤ 40): n={len(eligible_supply)}\n"
+                "Descriptive OLS slope < 0"
+            ),
+        )
 
         exposure = _metric_points(
             diagnostics, "mean_sample_exposure", checkpoint_gpu
@@ -826,6 +917,7 @@ def plot_temporally_aligned_diagnostics(
             exposure,
             effects["mean_sample_exposure"],
             color=ORANGE,
+            show_annotation=False,
         )
         ax_c1.set_title(
             "(C1) Replay reuse — mean sample exposure",
@@ -835,11 +927,11 @@ def plot_temporally_aligned_diagnostics(
             pad=5,
         )
         ax_c1.set_ylabel("Exposures", fontsize=9.0)
-        _status_box(ax_c1, "Pre-onset trend assessable")
+        _status_box(ax_c1, "Eligible trend assessable (ckpt ≤ 40, n=40)")
 
         mean_age = _metric_points(diagnostics, "mean_sample_age", checkpoint_gpu)
         p90_age = _metric_points(diagnostics, "p90_sample_age", checkpoint_gpu)
-        _plot_pre_post_series(
+        eligible_mean_age, _ = _plot_pre_post_series(
             ax_c2,
             mean_age,
             label="Mean sample age",
@@ -848,7 +940,7 @@ def plot_temporally_aligned_diagnostics(
             marker="o",
             linestyle="-",
         )
-        _plot_pre_post_series(
+        eligible_p90_age, _ = _plot_pre_post_series(
             ax_c2,
             p90_age,
             label="P90 sample age",
@@ -866,7 +958,15 @@ def plot_temporally_aligned_diagnostics(
         )
         ax_c2.set_ylabel("Age\n(iterations)", fontsize=9.0)
         ax_c2.legend(loc="lower right", frameon=False, fontsize=7.7, ncol=2)
-        _status_box(ax_c2, "Pre-onset trend assessable")
+        _status_box(
+            ax_c2,
+            (
+                f"Eligible observations: n={min(len(eligible_mean_age), len(eligible_p90_age))}\n"
+                "Mean age slope > 0; P90 age slope > 0"
+            ),
+            x=0.015,
+            ha="left",
+        )
 
         unique_ratio = _metric_points(
             diagnostics, "incoming_unique_state_ratio", checkpoint_gpu
@@ -941,10 +1041,12 @@ def plot_temporally_aligned_diagnostics(
             pre, _ = _plot_pre_post_series(
                 ax,
                 points,
-                label=ylabel,
+                label="Eligible checkpoints (ckpt ≤ 40)",
+                post_label="Post-onset descriptive",
                 pre_color=DEEP_BLUE,
                 post_color=LIGHT_BLUE,
                 marker="o",
+                connect_pre=False,
             )
             ax.set_title(
                 title,
@@ -956,7 +1058,7 @@ def plot_temporally_aligned_diagnostics(
             ax.set_ylabel(ylabel, fontsize=9.0)
             _status_box(
                 ax,
-                f"Insufficient pre-onset points (n={len(pre)})",
+                f"Eligible checkpoints (ckpt ≤ 40): n={len(pre)}",
             )
 
         for ax in axes[:-1]:
@@ -975,7 +1077,7 @@ def plot_temporally_aligned_diagnostics(
             0.105,
             0.964,
             (
-                "Filled solid marks contribute to the plateau-onset assessment; "
+                "Filled solid marks are eligible through checkpoint 40; "
                 "open or grey marks are post-onset descriptive observations."
             ),
             ha="left",
@@ -994,7 +1096,7 @@ def plot_temporally_aligned_diagnostics(
                 f"{plateau['confirmation_window_start']}–"
                 f"{plateau['confirmation_window_end']}). Approximate gaps subtract "
                 "same-iteration logged training loss from hold-out loss; no formal "
-                "pre-onset gap regression is reported from two checkpoints."
+                "eligible-set gap regression is reported from two checkpoints."
             ),
             ha="left",
             va="bottom",
@@ -1049,16 +1151,20 @@ def _label_plateau_onset(
     lookup = _checkpoint_gpu_lookup(aligned)
     onset_checkpoint = int(plateau["plateau_start_checkpoint"])
     onset_x = _checkpoint_x(onset_checkpoint, lookup, "plateau onset")
+    label_x = onset_x + 0.006 * (
+        max(row["gpu_hours"] for row in aligned)
+        - min(row["gpu_hours"] for row in aligned)
+    )
     ax.text(
-        onset_x,
-        0.985,
+        label_x,
+        0.94,
         f"Plateau onset: ckpt {onset_checkpoint}",
         transform=ax.get_xaxis_transform(),
         rotation=90,
         rotation_mode="anchor",
         ha="right",
         va="top",
-        fontsize=8.3,
+        fontsize=7.8,
         color=CHARCOAL,
     )
 
@@ -1149,6 +1255,11 @@ def plot_h1_panel_b(
     supply = _metric_points(
         diagnostics, "fresh_states_per_update", checkpoint_gpu
     )
+    supply_slope = _required_float(
+        effects["fresh_states_per_update"].get("slope_per_gpu_hour"),
+        "fresh_states_per_update slope_per_gpu_hour",
+    )
+    supply_slope_sign = ">" if supply_slope > 0 else "<" if supply_slope < 0 else "="
 
     with plt.rc_context(
         {
@@ -1162,18 +1273,13 @@ def plot_h1_panel_b(
         pre, _ = _plot_pre_post_series(
             ax,
             supply,
-            label="At or before plateau onset",
+            label="Eligible (ckpt ≤ 40)",
             post_label="Post-onset continuation",
             pre_color=DEEP_BLUE,
             post_color=LIGHT_BLUE,
             marker="o",
         )
-        _add_descriptive_fit(
-            ax,
-            supply,
-            effects["fresh_states_per_update"],
-            color=CHARCOAL,
-        )
+        _plot_supply_inset(ax, supply, aligned, plateau)
         _style_axis(ax)
         ax.set_xlim(-0.25, max(row["gpu_hours"] for row in aligned) + 0.45)
         ax.set_ylim(bottom=0)
@@ -1182,8 +1288,11 @@ def plot_h1_panel_b(
         ax.legend(loc="upper right", frameon=False, fontsize=8.2, ncol=2)
         _status_box(
             ax,
-            f"Pre-onset observations: n={len(pre)}; slope β < 0",
-            y=0.78,
+            (
+                f"Eligible observations (ckpt ≤ 40): n = {len(pre)}; "
+                f"descriptive OLS slope {supply_slope_sign} 0"
+            ),
+            y=0.27,
         )
 
         fig.suptitle(
@@ -1198,9 +1307,9 @@ def plot_h1_panel_b(
             0.10,
             0.895,
             (
-                "Iteration-level fresh_states_per_update. Filled points and the "
-                "dashed OLS fit use observations at or before checkpoint 40; "
-                "open points are descriptive continuation.\nThe darker band marks "
+                "Iteration-level fresh_states_per_update. Filled points are eligible "
+                "observations through checkpoint 40; open points are descriptive "
+                "continuation.\nThe inset magnifies the low-valued onset region; the darker band marks "
                 "the checkpoint 60–120 confirmation window."
             ),
             ha="left",
@@ -1239,6 +1348,16 @@ def plot_h1_panel_c(
         diagnostics, "incoming_unique_state_ratio", checkpoint_gpu
     )
     turnover = _metric_points(diagnostics, "turnover_fraction", checkpoint_gpu)
+    mean_age_slope = _required_float(
+        effects["mean_sample_age"].get("slope_per_gpu_hour"),
+        "mean_sample_age slope_per_gpu_hour",
+    )
+    p90_age_slope = _required_float(
+        effects["p90_sample_age"].get("slope_per_gpu_hour"),
+        "p90_sample_age slope_per_gpu_hour",
+    )
+    mean_age_sign = ">" if mean_age_slope > 0 else "<" if mean_age_slope < 0 else "="
+    p90_age_sign = ">" if p90_age_slope > 0 else "<" if p90_age_slope < 0 else "="
     snapshot_x = next(
         row["gpu_hours"]
         for row in diagnostics
@@ -1282,6 +1401,7 @@ def plot_h1_panel_c(
             exposure,
             effects["mean_sample_exposure"],
             color=ORANGE,
+            show_annotation=False,
         )
         ax_c1.set_title(
             "(C1) Replay reuse — mean sample exposure",
@@ -1293,7 +1413,7 @@ def plot_h1_panel_c(
         ax_c1.set_ylabel("Exposures", fontsize=9.2)
         _status_box(
             ax_c1,
-            f"Pre-onset trend assessable (n={len(pre_exposure)})",
+            f"Eligible trend assessable (ckpt ≤ 40, n={len(pre_exposure)})",
         )
 
         pre_age, _ = _plot_pre_post_series(
@@ -1305,7 +1425,7 @@ def plot_h1_panel_c(
             marker="o",
             linestyle="-",
         )
-        _plot_pre_post_series(
+        pre_p90_age, _ = _plot_pre_post_series(
             ax_c2,
             p90_age,
             label="P90 sample age",
@@ -1323,6 +1443,17 @@ def plot_h1_panel_c(
         )
         ax_c2.set_ylabel("Age (iterations)", fontsize=9.2)
         ax_c2.legend(loc="lower right", frameon=False, fontsize=7.8, ncol=2)
+        _status_box(
+            ax_c2,
+            (
+                f"Eligible observations: n={min(len(pre_age), len(pre_p90_age))}\n"
+                f"Mean age slope {mean_age_sign} 0; "
+                f"P90 age slope {p90_age_sign} 0"
+            ),
+            x=0.30,
+            y=0.94,
+            ha="left",
+        )
         _plot_post_onset_only(
             ax_c3,
             unique_ratio,
@@ -1355,7 +1486,7 @@ def plot_h1_panel_c(
         )
         ax_c3.text(
             turnover_x + 0.12,
-            0.18,
+            0.08,
             "Turnover observable\nfrom iteration 151",
             fontsize=8.0,
             color=MID_GREY,
@@ -1370,8 +1501,14 @@ def plot_h1_panel_c(
         )
         ax_c3.set_ylabel("Fraction", fontsize=9.2)
         ax_c3.set_ylim(-0.035, 1.02)
-        ax_c3.legend(loc="center right", frameon=False, fontsize=7.8)
+        ax_c3.legend(
+            loc="center right",
+            bbox_to_anchor=(1.0, 0.35),
+            frameon=False,
+            fontsize=7.8,
+        )
         _status_box(ax_c3, "Post-onset supplementary evidence only")
+        _plot_turnover_inset(ax_c3, turnover)
         ax_c3.set_xlabel("Cumulative GPU-hours", fontsize=10.2, labelpad=7)
         for ax in axes[:-1]:
             ax.tick_params(labelbottom=False)
@@ -1389,26 +1526,14 @@ def plot_h1_panel_c(
             0.945,
             (
                 "Iteration-level replay proxies are observed from training start. "
-                "Filled/solid marks are at or before the checkpoint-40 plateau "
-                "onset; open or grey marks are post-onset.\nThe darker band is the "
+                "Filled/solid marks are eligible observations through checkpoint 40; "
+                "open or grey marks are post-onset.\nThe darker band is the "
                 "checkpoint 60–120 confirmation window."
             ),
             ha="left",
             va="top",
             fontsize=8.9,
             color=MID_GREY,
-        )
-        fig.text(
-            0.98,
-            0.875,
-            (
-                "C2 uses the same pre-onset trend configuration as C1 "
-                f"(n={len(pre_age)})."
-            ),
-            ha="right",
-            va="top",
-            fontsize=8.4,
-            color=CHARCOAL,
         )
         fig.subplots_adjust(left=0.10, right=0.98, top=0.84, bottom=0.09)
         output_path = Path(output_path)
@@ -1418,18 +1543,19 @@ def plot_h1_panel_c(
     return output_path
 
 
-def _annotate_pre_onset_checkpoints(
+def _annotate_eligible_checkpoints(
     ax: Axes, points: Sequence[dict[str, Any]]
 ) -> None:
     for point in points:
+        is_onset = int(point["checkpoint"]) == 40
         ax.annotate(
             f"ckpt {point['checkpoint']}",
             xy=(point["x"], point["value"]),
-            xytext=(5, 6),
+            xytext=(-8, 6) if is_onset else (5, 6),
             textcoords="offset points",
             fontsize=7.8,
             color=DEEP_BLUE,
-            ha="left",
+            ha="right" if is_onset else "left",
             va="bottom",
         )
 
@@ -1486,13 +1612,14 @@ def plot_h1_panel_d(
             pre, _ = _plot_pre_post_series(
                 ax,
                 points,
-                label="At or before onset",
+                label="Eligible checkpoints (ckpt ≤ 40)",
                 post_label="Post-onset descriptive",
                 pre_color=DEEP_BLUE,
                 post_color=LIGHT_BLUE,
                 marker="o",
+                connect_pre=False,
             )
-            _annotate_pre_onset_checkpoints(ax, pre)
+            _annotate_eligible_checkpoints(ax, pre)
             ax.set_title(
                 title,
                 loc="left",
@@ -1503,7 +1630,7 @@ def plot_h1_panel_d(
             ax.set_ylabel(ylabel, fontsize=9.2)
             _status_box(
                 ax,
-                f"Pre-onset observations: n={len(pre)}",
+                f"Eligible checkpoints (ckpt ≤ 40): n={len(pre)}",
                 y=1.10,
             )
             if index == 0:
@@ -1524,8 +1651,8 @@ def plot_h1_panel_d(
             0.928,
             (
                 "Approximate gap = hold-out loss − same-iteration logged training loss. "
-                "Filled points are checkpoints 20 and 40; open points are "
-                "post-onset descriptive observations.\nThe darker band is the "
+                "Filled points are the eligible checkpoints 20 and 40;\nopen points are "
+                "post-onset descriptive observations. The darker band is the "
                 "checkpoint 60–120 confirmation window."
             ),
             ha="left",
@@ -1536,7 +1663,7 @@ def plot_h1_panel_d(
         fig.text(
             0.10,
             0.862,
-            "Insufficient pre-onset observations for trend assessment.",
+            "Insufficient eligible checkpoints for trend assessment.",
             ha="left",
             va="top",
             fontsize=9.2,
