@@ -305,10 +305,10 @@ def test_baseline_gate2_analysis_protocol_is_frozen() -> None:
         "outputs/baseline_seed1001_4090_analysis/replay/trajectory_stats.csv"
     )
     assert config["outputs"]["plateau_windows"] == (
-        "outputs/baseline_seed1001_4090_analysis/h1_v1/plateau_windows.csv"
+        "outputs/baseline_seed1001_4090_analysis/h1_v1_1/plateau_windows.csv"
     )
     assert config["outputs"]["plateau_result"] == (
-        "outputs/baseline_seed1001_4090_analysis/h1_v1/plateau.json"
+        "outputs/baseline_seed1001_4090_analysis/h1_v1_1/plateau.json"
     )
 
 

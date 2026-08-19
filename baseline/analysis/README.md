@@ -38,6 +38,7 @@ The formal hold-out therefore uses both sides of the shared checkpoint 0 under t
 | `analysis/configs/fixed_basket_v1.yaml` | The authoritative fixed-basket protocol: checkpoints, opponents, game counts, side schedule, MCTS settings, temperature schedule, and seed |
 | `analysis/configs/holdout_v1.yaml` | The authoritative frozen hold-out protocol: checkpoint-0 source hash, model, self-play, storage, evaluation checkpoints, and trajectory-bootstrap settings |
 | `analysis/configs/h1_v1.yaml` | The authoritative H1 merge grid, interval aggregation, trend directions, evidence-stage classification, missing-data handling, and output paths |
+| `analysis/configs/h1_v1_1.yaml` | The revised H1 protocol separating source-native trend grains from checkpoint-aligned presentation, with corrected observability and plateau confirmation semantics |
 
 There is deliberately no fixed-basket protocol section in `baseline_gate2.yaml`.
 Fixed-basket protocol settings are read only from `fixed_basket_v1.yaml`; the
@@ -289,7 +290,7 @@ real checkpoint iterations for each four-point OLS window, and applies the
 paired bootstrap and consecutive-window rule from `baseline_gate2.yaml`.
 
 ```text
-outputs/baseline_seed1001_4090_analysis/h1_v1/
+outputs/baseline_seed1001_4090_analysis/h1_v1_1/
 |-- plateau_windows.csv
 `-- plateau.json
 ```
@@ -391,11 +392,15 @@ The script audits every registered upstream status and file, freezes the resolve
 protocol and input manifest, aggregates iteration data into the 12 checkpoint
 blocks, and preserves missing and left-truncated observations as null. Ratio
 metrics use a ratio of sums; checkpoint 210 is the complete 201–210 short block.
+The aligned table is presentation data only. H1 effects use training iterations,
+replay-snapshot iterations, or evaluation checkpoints according to each metric's
+registered `analysis_grain`, and classify descriptive OLS slope and endpoint
+agreement without a significance test.
 It then writes `aligned_checkpoint_metrics.csv`, `h1_effects.csv`,
-`h1_decision.json`, and `h1_summary.md` under `h1_v1/`, and updates
+`h1_decision.json`, and `h1_summary.md` under `h1_v1_1/`, and updates
 `gate2/summary.json` with the plateau/H1 statuses and product hashes.
 
-An effect needs at least four valid checkpoints. When the plateau is not
+An effect needs at least four valid points at its registered source grain. When the plateau is not
 reproduced, the full-run effects are labelled descriptive only and H1 is
 `not_assessable`.
 
@@ -426,8 +431,8 @@ The repository does not currently assign final dissertation figure numbers. Duri
 | Policy/value generalisation curve | `holdout_v1/checkpoint_metrics.csv` | Frozen checkpoint-0 self-play hold-out losses, approximate online train–hold-out gaps, and game-cluster bootstrap intervals |
 | Hold-out trajectory sensitivity | `holdout_v1/trajectory_checkpoint_metrics.csv` | Checkpoint-by-game loss distributions without treating within-game states as independent trajectories |
 | Hold-out provenance and integrity | `holdout_v1/protocol.resolved.yaml`, `holdout_v1/manifest.json`, `holdout_v1/summary.json` | Dataset source hash, exact self-play protocol, state schema, checkpoint hashes, and evaluation definitions |
-| Aligned H1 evidence and Figure 5.1 annotations | `h1_v1/aligned_checkpoint_metrics.csv`, `h1_v1/h1_effects.csv` | Twelve-checkpoint merge, observability, best/final points, running best, and drawdown markers |
-| H1 decision | `h1_v1/h1_decision.json`, `h1_v1/h1_summary.md` | Supply, replay, approximate train–hold-out gap, temporal-order stages, and the final H1 status |
+| Aligned H1 evidence and Figure 5.1 annotations | `h1_v1_1/aligned_checkpoint_metrics.csv`, `h1_v1_1/h1_effects.csv` | Twelve-checkpoint presentation table plus source-native iteration/checkpoint effects, observability, best/final points, running best, and drawdown markers |
+| H1 decision | `h1_v1_1/h1_decision.json`, `h1_v1_1/h1_summary.md` | Supply, replay proxy, snapshot diversity, approximate train–hold-out gap, temporal alignment, and the final H1 status |
 | Methods and reproducibility appendix | `evaluation_manifest.json`, `protocol.resolved.yaml` | Seeds, checkpoint provenance, protocol, source-integrity status, and data-quality notes |
 | Per-game audit | `fixed_basket_v1/games.jsonl` | Trace abnormal termination, turn-limit games, colours, and game seeds; not a main result table |
 

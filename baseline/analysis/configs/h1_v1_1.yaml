@@ -1,0 +1,403 @@
+schema_version: 1
+protocol_id: h1_v1_1
+hypothesis_id: H1
+
+revision:
+  supersedes: h1_v1
+  status: analysis_protocol_revision
+  reasons:
+    - preserve_source_native_grain_for_trend_analysis
+    - reserve_checkpoint_aggregation_for_alignment_and_figures
+    - separate_training_log_replay_proxies_from_snapshot_left_truncation
+    - define_minimum_trend_evidence_as_points_not_checkpoints
+    - replace_unimplemented_significance_claim_with_descriptive_ols
+    - separate_diagnostic_signal_detection_from_plateau_temporal_alignment
+    - distinguish_retrospective_plateau_start_from_confirmation_checkpoint
+
+checkpoint_grid:
+  field: checkpoint
+  iterations:
+    - 0
+    - 20
+    - 40
+    - 60
+    - 80
+    - 100
+    - 120
+    - 140
+    - 160
+    - 180
+    - 200
+    - 210
+
+inputs:
+  baseline_gate2_config: analysis/configs/baseline_gate2.yaml
+  plateau_result: outputs/baseline_seed1001_4090_analysis/h1_v1_1/plateau.json
+  plateau_windows: outputs/baseline_seed1001_4090_analysis/h1_v1_1/plateau_windows.csv
+  training_metrics: outputs/baseline_reproduction_seed1001_4090/metrics.jsonl
+  derived_metrics: outputs/baseline_reproduction_seed1001_4090/gate2/derived_metrics.csv
+  data_quality_report: outputs/baseline_reproduction_seed1001_4090/gate2/data_quality_report.json
+  replay_iteration_metrics: outputs/baseline_seed1001_4090_analysis/replay/replay_iteration_stats.csv
+  replay_summary: outputs/baseline_seed1001_4090_analysis/replay/replay_final_summary.json
+  fixed_basket_checkpoint_summary: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
+  fixed_basket_opponent_summary: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/opponent_summary.csv
+  holdout_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/holdout_v1/checkpoint_metrics.csv
+  holdout_trajectory_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/holdout_v1/trajectory_checkpoint_metrics.csv
+  holdout_manifest: outputs/baseline_seed1001_4090_analysis/holdout_v1/manifest.json
+  holdout_summary: outputs/baseline_seed1001_4090_analysis/holdout_v1/summary.json
+
+plateau_source:
+  config: analysis/configs/baseline_gate2.yaml
+  section: plateau
+  metric: fixed_basket_macro_score
+  copy_thresholds_into_h1_config: false
+  retrospective_start_field: plateau_start_checkpoint
+  confirmation_field: plateau_confirmation_checkpoint
+
+merge:
+  result_grain: one_row_per_registered_checkpoint
+  result_key: checkpoint
+  base: checkpoint_grid
+  point_source_join: exact_checkpoint
+  duplicate_source_key: error
+  unregistered_source_checkpoint: error
+  purpose:
+    - figure_alignment
+    - cross_source_summary
+  use_as_only_trend_source: false
+
+interval_aggregation:
+  applies_to: checkpoint_aligned_output_only
+  interval: "previous_checkpoint < iteration <= checkpoint"
+  methods:
+    ratio_metrics: ratio_of_sums
+    distribution_summaries: arithmetic_mean_of_iteration_values
+    cumulative_metrics: interval_endpoint
+  ratio_of_sums:
+    fresh_states_per_update: "sum(positions_generated) / sum(optimizer_steps)"
+    states_per_gpu_hour: "sum(positions_generated) / (sum(iteration_seconds) / 3600)"
+    games_per_gpu_hour: "sum(games_completed) / (sum(iteration_seconds) / 3600)"
+    buffer_inflow_fraction: "sum(positions_generated) / sum(replay_buffer_size)"
+    mean_sample_exposure: "sum(samples_seen) / sum(replay_buffer_size)"
+    incoming_unique_state_ratio: "sum(incoming_unique_states) / sum(states)"
+    duplicate_rate: "sum(duplicate_hash_occurrences) / sum(states)"
+    state_effective_ratio: "sum(state_effective_count) / sum(states)"
+  arithmetic_means:
+    - mean_sample_age
+    - p90_sample_age
+    - turnover_fraction
+  endpoints:
+    - cumulative_gpu_hours
+    - replay_buffer_size
+  checkpoint_0_value: null
+  expected_rows: all_integer_iterations_in_interval_intersected_with_metric_eligibility
+  incomplete_expected_rows: null
+  empty_eligible_interval: null
+  registered_200_to_210_interval_is_complete: true
+
+trend_analysis:
+  method: descriptive_ols
+  minimum_valid_points: 4
+  x_by_analysis_grain:
+    training_iteration: iteration
+    replay_iteration: iteration
+    evaluation_checkpoint: checkpoint
+  range:
+    start: earliest_observable_point_for_metric
+    end_when_plateau_reproduced: plateau_start_checkpoint_inclusive
+    end_when_plateau_not_reproduced: final_observable_point
+    no_plateau_mode: descriptive_only
+  classification:
+    consistent: slope_and_endpoint_match_expected_direction
+    mixed: slope_and_endpoint_disagree_or_one_is_flat
+    inconsistent: slope_and_endpoint_both_opposite
+    unavailable: fewer_than_minimum_valid_points
+  significance_test: none
+
+effect_output:
+  fields:
+    - evidence_stage
+    - metric
+    - analysis_grain
+    - analysis_mode
+    - start_iteration
+    - end_iteration
+    - start_checkpoint
+    - end_checkpoint
+    - valid_points
+    - start_value
+    - end_value
+    - absolute_change
+    - relative_change
+    - ols_slope_per_iteration
+    - slope_per_20_iterations
+    - slope_per_gpu_hour
+    - expected_direction
+    - slope_direction
+    - endpoint_direction
+    - effect_status
+    - availability_status
+    - limitation
+
+metrics:
+  fresh_states_per_update:
+    source: training_metrics
+    analysis_grain: training_iteration
+    analysis_value: "positions_generated / optimizer_steps"
+    checkpoint_value: ratio_of_sums
+    numerator: positions_generated
+    denominator: optimizer_steps
+    eligible_iteration_start: 1
+    expected_direction: decrease
+
+  buffer_inflow_fraction:
+    source: training_metrics
+    analysis_grain: training_iteration
+    analysis_value: "positions_generated / replay_buffer_size"
+    checkpoint_value: ratio_of_sums
+    numerator: positions_generated
+    denominator: replay_buffer_size
+    eligible_iteration_start: 1
+    expected_direction: decrease
+
+  states_per_gpu_hour:
+    source: training_metrics
+    analysis_grain: training_iteration
+    analysis_value: "positions_generated / (iteration_seconds / 3600)"
+    checkpoint_value: ratio_of_sums
+    numerator: positions_generated
+    denominator: iteration_seconds
+    scale: 3600
+    eligible_iteration_start: 1
+    expected_direction: not_increase
+
+  mean_sample_exposure:
+    source: training_metrics
+    analysis_grain: training_iteration
+    analysis_value: "samples_seen / replay_buffer_size"
+    checkpoint_value: ratio_of_sums
+    numerator: samples_seen
+    denominator: replay_buffer_size
+    eligible_iteration_start: 1
+    expected_direction: increase
+
+  mean_sample_age:
+    source: derived_metrics
+    analysis_grain: training_iteration
+    source_column: mean_sample_age
+    checkpoint_value: interval_mean
+    eligible_iteration_start: 1
+    expected_direction: increase
+
+  p90_sample_age:
+    source: derived_metrics
+    analysis_grain: training_iteration
+    source_column: p90_sample_age
+    checkpoint_value: interval_mean
+    eligible_iteration_start: 1
+    expected_direction: increase
+
+  turnover_fraction:
+    source: derived_metrics
+    analysis_grain: training_iteration
+    source_column: turnover_fraction
+    checkpoint_value: interval_mean
+    eligible_iteration_start: 151
+    expected_direction: decrease
+
+  incoming_unique_state_ratio:
+    source: replay_iteration_metrics
+    analysis_grain: replay_iteration
+    source_column: incoming_unique_state_ratio
+    checkpoint_value: ratio_of_sums
+    eligible_iteration_start: 61
+    exclude_rows_where:
+      incoming_ratio_left_censored: true
+    expected_direction: decrease
+
+  duplicate_rate:
+    source: replay_iteration_metrics
+    analysis_grain: replay_iteration
+    source_column: duplicate_rate
+    checkpoint_value: ratio_of_sums
+    eligible_iteration_start: 61
+    expected_direction: increase
+
+  state_effective_ratio:
+    source: replay_iteration_metrics
+    analysis_grain: replay_iteration
+    source_column: state_effective_ratio
+    checkpoint_value: ratio_of_sums
+    numerator: state_effective_count
+    denominator: states
+    eligible_iteration_start: 61
+    expected_direction: decrease
+
+  approx_policy_gap:
+    source: holdout_checkpoint_metrics
+    analysis_grain: evaluation_checkpoint
+    source_column: approx_policy_gap
+    checkpoint_value: exact_checkpoint
+    expected_direction: increase
+
+  approx_value_gap:
+    source: holdout_checkpoint_metrics
+    analysis_grain: evaluation_checkpoint
+    source_column: approx_value_gap
+    checkpoint_value: exact_checkpoint
+    expected_direction: increase
+
+  approx_total_gap:
+    source: holdout_checkpoint_metrics
+    analysis_grain: evaluation_checkpoint
+    checkpoint_value: exact_checkpoint
+    derivation: approx_policy_gap_plus_approx_value_gap
+    expected_direction: increase
+
+  fixed_basket_macro_score:
+    source: fixed_basket_checkpoint_summary
+    analysis_grain: evaluation_checkpoint
+    checkpoint_value: exact_checkpoint
+    derivation:
+      method: equal_weight_arithmetic_mean
+      source_columns:
+        - heuristic_20_score
+        - heuristic_200_score
+        - greedy_random_50_score
+        - random_score
+      validation_column: score_rate
+      validation_reason: each_opponent_contributes_50_games
+    expected_direction: later_plateau
+    trend_analysis: plateau_source_only
+
+observability:
+  training_log_proxies:
+    eligible_iteration_start: 1
+    metrics:
+      - mean_sample_exposure
+      - mean_sample_age
+      - p90_sample_age
+  final_snapshot_metrics:
+    eligible_iteration_start: 61
+    metrics:
+      - incoming_unique_state_ratio
+      - duplicate_rate
+      - state_effective_ratio
+  post_buffer_fill_metrics:
+    eligible_iteration_start: 151
+    metrics:
+      - turnover_fraction
+
+temporal_alignment:
+  signal_detection_source: full_observable_source_native_series
+  signal_checkpoint: first_checkpoint_at_or_after_a_qualified_diagnostic_signal
+  compare_signal_to:
+    - plateau_start_checkpoint
+    - plateau_confirmation_checkpoint
+  categories:
+    before_or_at_plateau_start: consistent_before_or_at_onset
+    only_after_plateau_start: post_onset_only
+    contradictory_available_trends: mixed
+    no_qualified_signal: unavailable
+  interpretation: limited_alignment_not_change_point_detection
+
+evidence_stages:
+  supply:
+    role: primary
+    core_metric: fresh_states_per_update
+    metrics:
+      - fresh_states_per_update
+      - buffer_inflow_fraction
+      - states_per_gpu_hour
+  replay_pressure:
+    role: primary
+    core_metrics:
+      - mean_sample_exposure
+      - mean_sample_age
+      - p90_sample_age
+    conditional_metric: turnover_fraction
+  snapshot_diversity:
+    role: supplementary
+    metrics:
+      - duplicate_rate
+      - incoming_unique_state_ratio
+      - state_effective_ratio
+  generalization:
+    role: primary
+    terminology: approximate_online_train_holdout_gap
+    metrics:
+      - approx_policy_gap
+      - approx_value_gap
+      - approx_total_gap
+  temporal_alignment:
+    role: primary
+    rule: h1_consistent_diagnostic_trend_observable_using_only_data_at_or_before_plateau_onset
+  playing_strength:
+    role: outcome
+    metrics:
+      - fixed_basket_macro_score
+
+stage_classification:
+  allowed_statuses:
+    - consistent
+    - mixed
+    - inconsistent
+    - unavailable
+  temporal_alignment_allowed_statuses:
+    - consistent_before_or_at_onset
+    - post_onset_only
+    - mixed
+    - unavailable
+
+h1_classification:
+  allowed_statuses:
+    - supported_with_limitations
+    - partially_supported
+    - not_supported
+    - not_assessable
+  rules:
+    not_assessable: plateau_not_reproduced_or_input_audit_failed_or_core_supply_unavailable
+    supported_with_limitations: all_available_stages_consistent_and_no_stage_unavailable
+    partially_supported: supply_consistent_and_replay_or_generalisation_or_temporal_alignment_mixed_or_unavailable
+    not_supported: supply_inconsistent_or_most_primary_metric_directions_contradict_h1
+  score_or_point_total: none
+
+missing_values:
+  recognized_as_missing:
+    - empty_csv_field
+    - yaml_null
+  zero_is_missing: false
+  non_finite_numeric_value: error
+  imputation: none
+  interpolation: none
+  exclude_missing_values_from_trend: true
+  fewer_than_four_valid_trend_points: unavailable
+
+left_truncation:
+  replay_retained_iteration_start: 61
+  applies_only_to_metrics_reconstructed_from_final_snapshot: true
+  affected_metrics:
+    - incoming_unique_state_ratio
+    - duplicate_rate
+    - state_effective_ratio
+  unaffected_training_log_proxies:
+    - mean_sample_exposure
+    - mean_sample_age
+    - p90_sample_age
+  synthesize_pre_retention_values: false
+  incoming_unique_ratio_at_iteration_61: exclude_when_incoming_ratio_left_censored_is_true
+  turnover_observation_start_iteration: 151
+  pre_observation_turnover_values: exclude_from_h1_trend
+  extrapolation: none
+
+outputs:
+  root: outputs/baseline_seed1001_4090_analysis/h1_v1_1
+  resolved_protocol: outputs/baseline_seed1001_4090_analysis/h1_v1_1/protocol.resolved.yaml
+  input_manifest: outputs/baseline_seed1001_4090_analysis/h1_v1_1/input_manifest.json
+  aligned_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/h1_v1_1/aligned_checkpoint_metrics.csv
+  h1_effects: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_effects.csv
+  h1_decision: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_decision.json
+  h1_summary: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_summary.md
+  plateau_windows: outputs/baseline_seed1001_4090_analysis/h1_v1_1/plateau_windows.csv
+  plateau_result: outputs/baseline_seed1001_4090_analysis/h1_v1_1/plateau.json
+  run_log: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1.log

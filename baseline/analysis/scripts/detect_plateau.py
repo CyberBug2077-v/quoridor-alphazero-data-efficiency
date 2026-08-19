@@ -26,7 +26,7 @@ DEFAULT_GAMES = DEFAULT_BASKET_OUTPUT / "games.jsonl"
 DEFAULT_CHECKPOINT_SUMMARY = DEFAULT_BASKET_OUTPUT / "checkpoint_summary.csv"
 DEFAULT_MANIFEST = DEFAULT_BASKET_OUTPUT / "evaluation_manifest.json"
 DEFAULT_OUTPUT_DIR = (
-    BASELINE_ROOT / "outputs" / "baseline_seed1001_4090_analysis" / "h1_v1"
+    BASELINE_ROOT / "outputs" / "baseline_seed1001_4090_analysis" / "h1_v1_1"
 )
 
 WINDOW_FIELDS = (
@@ -701,19 +701,45 @@ def detect_consecutive_plateau_windows(
     if qualifying_run is not None:
         first_index, run_length = qualifying_run
         first = window_results[first_index]
+        confirmation_index = first_index + required_consecutive_windows - 1
+        confirmation = window_results[confirmation_index]
+        plateau_start = _as_int(
+            first.get("start_checkpoint"), "window start_checkpoint"
+        )
         return {
             "plateau_detected": True,
-            "plateau_iteration": _as_int(
-                first.get("start_checkpoint"), "window start_checkpoint"
-            ),
+            "plateau_iteration": plateau_start,
+            "plateau_start_checkpoint": plateau_start,
             "first_qualifying_window_index": first_index,
+            "first_qualifying_window_start": plateau_start,
+            "first_qualifying_window_end": _as_int(
+                first.get("end_checkpoint"), "window end_checkpoint"
+            ),
+            "confirmation_window_start": _as_int(
+                confirmation.get("start_checkpoint"),
+                "confirmation window start_checkpoint",
+            ),
+            "confirmation_window_end": _as_int(
+                confirmation.get("end_checkpoint"),
+                "confirmation window end_checkpoint",
+            ),
+            "plateau_confirmation_checkpoint": _as_int(
+                confirmation.get("end_checkpoint"),
+                "confirmation window end_checkpoint",
+            ),
             "consecutive_qualifying_windows": run_length,
             "qualifying_window_indices": qualifying_indices,
         }
     return {
         "plateau_detected": False,
         "plateau_iteration": None,
+        "plateau_start_checkpoint": None,
         "first_qualifying_window_index": None,
+        "first_qualifying_window_start": None,
+        "first_qualifying_window_end": None,
+        "confirmation_window_start": None,
+        "confirmation_window_end": None,
+        "plateau_confirmation_checkpoint": None,
         "consecutive_qualifying_windows": 0,
         "qualifying_window_indices": qualifying_indices,
     }

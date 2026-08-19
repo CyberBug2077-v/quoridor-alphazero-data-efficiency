@@ -129,6 +129,7 @@ def test_normal_plateau_case() -> None:
         results.append(
             {
                 "start_checkpoint": window[0],
+                "end_checkpoint": window[-1],
                 "qualifies": detect.qualify_flat_window(
                     bootstrap["ci_low"],
                     bootstrap["ci_high"],
@@ -146,9 +147,9 @@ def test_normal_plateau_case() -> None:
 
 def test_no_plateau_case() -> None:
     results = [
-        {"start_checkpoint": 0, "qualifies": False},
-        {"start_checkpoint": 20, "qualifies": False},
-        {"start_checkpoint": 40, "qualifies": False},
+        {"start_checkpoint": 0, "end_checkpoint": 60, "qualifies": False},
+        {"start_checkpoint": 20, "end_checkpoint": 80, "qualifies": False},
+        {"start_checkpoint": 40, "end_checkpoint": 100, "qualifies": False},
     ]
     decision = detect.detect_consecutive_plateau_windows(results)
     assert decision["plateau_detected"] is False
@@ -157,9 +158,9 @@ def test_no_plateau_case() -> None:
 
 def test_only_one_qualifying_window_is_not_a_plateau() -> None:
     results = [
-        {"start_checkpoint": 0, "qualifies": False},
-        {"start_checkpoint": 20, "qualifies": True},
-        {"start_checkpoint": 40, "qualifies": False},
+        {"start_checkpoint": 0, "end_checkpoint": 60, "qualifies": False},
+        {"start_checkpoint": 20, "end_checkpoint": 80, "qualifies": True},
+        {"start_checkpoint": 40, "end_checkpoint": 100, "qualifies": False},
     ]
     decision = detect.detect_consecutive_plateau_windows(results)
     assert decision["plateau_detected"] is False
@@ -168,14 +169,20 @@ def test_only_one_qualifying_window_is_not_a_plateau() -> None:
 
 def test_plateau_decision_reports_all_qualifying_windows_and_full_first_run() -> None:
     results = [
-        {"start_checkpoint": 0, "qualifies": True},
-        {"start_checkpoint": 20, "qualifies": False},
-        {"start_checkpoint": 40, "qualifies": True},
-        {"start_checkpoint": 60, "qualifies": True},
-        {"start_checkpoint": 80, "qualifies": True},
+        {"start_checkpoint": 0, "end_checkpoint": 60, "qualifies": True},
+        {"start_checkpoint": 20, "end_checkpoint": 80, "qualifies": False},
+        {"start_checkpoint": 40, "end_checkpoint": 100, "qualifies": True},
+        {"start_checkpoint": 60, "end_checkpoint": 120, "qualifies": True},
+        {"start_checkpoint": 80, "end_checkpoint": 140, "qualifies": True},
     ]
     decision = detect.detect_consecutive_plateau_windows(results)
     assert decision["plateau_iteration"] == 40
+    assert decision["plateau_start_checkpoint"] == 40
+    assert decision["first_qualifying_window_start"] == 40
+    assert decision["first_qualifying_window_end"] == 100
+    assert decision["confirmation_window_start"] == 60
+    assert decision["confirmation_window_end"] == 120
+    assert decision["plateau_confirmation_checkpoint"] == 120
     assert decision["consecutive_qualifying_windows"] == 3
     assert decision["qualifying_window_indices"] == [0, 2, 3, 4]
 
@@ -424,25 +431,40 @@ def test_checkpoint_zero_gaps_are_missing_not_zero() -> None:
     assert row["approx_total_gap"] is None
 
 
-def test_replay_metrics_are_left_truncated_before_iteration_61() -> None:
+def test_training_replay_proxies_are_available_before_iteration_61() -> None:
+    [row] = merge.apply_observability_rules(
+        [
+            {
+                "checkpoint": 40,
+                "mean_sample_exposure": 1.0,
+                "mean_sample_age": 2.0,
+                "p90_sample_age": 3.0,
+            }
+        ]
+    )
+    assert row["mean_sample_exposure"] == pytest.approx(1.0)
+    assert row["mean_sample_age"] == pytest.approx(2.0)
+    assert row["p90_sample_age"] == pytest.approx(3.0)
+
+
+def test_snapshot_replay_metrics_are_left_truncated_before_iteration_61() -> None:
     rows = merge.apply_observability_rules(
         [
             {
                 "checkpoint": checkpoint,
-                "mean_sample_exposure": 1.0,
-                "mean_sample_age": 2.0,
-                "p90_sample_age": 3.0,
                 "incoming_unique_state_ratio": 0.5,
-                "duplicate_rate": 0.5,
-                "state_effective_ratio": 0.5,
+                "duplicate_rate": 0.4,
+                "state_effective_ratio": 0.6,
             }
             for checkpoint in (60, 80)
         ]
     )
-    assert rows[0]["mean_sample_exposure"] is None
+    assert rows[0]["incoming_unique_state_ratio"] is None
     assert rows[0]["duplicate_rate"] is None
-    assert rows[0]["replay_observable"] is False
-    assert rows[1]["mean_sample_exposure"] == pytest.approx(1.0)
+    assert rows[0]["state_effective_ratio"] is None
+    assert rows[1]["incoming_unique_state_ratio"] == pytest.approx(0.5)
+    assert rows[1]["duplicate_rate"] == pytest.approx(0.4)
+    assert rows[1]["state_effective_ratio"] == pytest.approx(0.6)
 
 
 def test_turnover_is_unobservable_until_iteration_151() -> None:
@@ -542,7 +564,16 @@ def test_maximum_drawdown_marks_its_peak_and_trough() -> None:
 
 
 @pytest.mark.parametrize(
-    ("input_status", "plateau", "supply", "replay", "gap", "temporal", "expected"),
+    (
+        "input_status",
+        "plateau",
+        "supply",
+        "replay",
+        "snapshot",
+        "gap",
+        "temporal",
+        "expected",
+    ),
     [
         (
             "passed",
@@ -551,6 +582,7 @@ def test_maximum_drawdown_marks_its_peak_and_trough() -> None:
             "consistent",
             "consistent",
             "consistent",
+            "consistent_before_or_at_onset",
             "supported_with_limitations",
         ),
         (
@@ -559,6 +591,7 @@ def test_maximum_drawdown_marks_its_peak_and_trough() -> None:
             "consistent",
             "mixed",
             "unavailable",
+            "unavailable",
             "consistent",
             "partially_supported",
         ),
@@ -566,6 +599,7 @@ def test_maximum_drawdown_marks_its_peak_and_trough() -> None:
             "passed",
             True,
             "inconsistent",
+            "consistent",
             "consistent",
             "consistent",
             "consistent",
@@ -578,6 +612,27 @@ def test_maximum_drawdown_marks_its_peak_and_trough() -> None:
             "consistent",
             "consistent",
             "consistent",
+            "consistent",
+            "not_assessable",
+        ),
+        (
+            "failed",
+            True,
+            "consistent",
+            "consistent",
+            "consistent",
+            "consistent",
+            "consistent_before_or_at_onset",
+            "not_assessable",
+        ),
+        (
+            "passed",
+            True,
+            "unavailable",
+            "consistent",
+            "unavailable",
+            "unavailable",
+            "unavailable",
             "not_assessable",
         ),
     ],
@@ -587,6 +642,7 @@ def test_four_h1_outcomes(
     plateau: bool,
     supply: str,
     replay: str,
+    snapshot: str,
     gap: str,
     temporal: str,
     expected: str,
@@ -596,26 +652,273 @@ def test_four_h1_outcomes(
         plateau_detected=plateau,
         supply=supply,
         replay=replay,
+        snapshot_diversity=snapshot,
         generalisation=gap,
-        temporal_order=temporal,
+        temporal_alignment=temporal,
     ) == expected
 
 
 def test_no_plateau_uses_full_run_in_descriptive_only_mode() -> None:
     rows = [
         {
-            "checkpoint": checkpoint,
-            "fresh_states_per_update": value,
-            "training_gpu_hours": float(checkpoint),
+            "metric": "fresh_states_per_update",
+            "analysis_grain": "training_iteration",
+            "x_iteration": iteration,
+            "x_gpu_hours": float(iteration),
+            "value": value,
         }
-        for checkpoint, value in ((20, 4.0), (40, 3.0), (60, 2.0), (80, 1.0))
+        for iteration, value in ((20, 4.0), (40, 3.0), (60, 2.0), (80, 1.0))
     ]
     selected = merge.select_pre_plateau_range(
         rows,
         "fresh_states_per_update",
+        "training_iteration",
         {"plateau_detected": False, "plateau_iteration": None},
     )
     assert selected["analysis_mode"] == "descriptive_full_run"
     assert selected["availability_status"] == "available"
     assert len(selected["rows"]) == 4
     assert "descriptive only" in selected["limitation"]
+
+
+def test_early_plateau_uses_iteration_level_supply() -> None:
+    raw_metrics = []
+    derived_metrics = []
+    for iteration in range(1, 41):
+        positions = 1000 - iteration
+        raw_metrics.append(
+            {
+                "iteration": iteration,
+                "positions_generated": positions,
+                "games_completed": 10,
+                "optimizer_steps": 10,
+                "replay_buffer_size": 10000 + iteration,
+                "examples_used": 100,
+                "samples_seen": 200,
+                "iteration_seconds": 60.0,
+                "self_play_seconds": 40.0,
+                "training_seconds": 20.0,
+                "cumulative_gpu_hours": iteration / 60.0,
+            }
+        )
+        derived_metrics.append(
+            {
+                "iteration": iteration,
+                "positions_generated": positions,
+                "mean_sample_age": iteration / 2.0,
+                "p90_sample_age": float(iteration),
+                "turnover_fraction": 0.01,
+            }
+        )
+    training_rows = merge.build_training_iteration_effect_rows(
+        raw_metrics,
+        derived_metrics,
+        {
+            "plateau_detected": True,
+            "plateau_start_checkpoint": 40,
+            "plateau_iteration": 40,
+        },
+    )
+    effects = merge.build_effect_rows(
+        training_rows,
+        [],
+        [],
+        {
+            "plateau_detected": True,
+            "plateau_start_checkpoint": 40,
+            "plateau_iteration": 40,
+        },
+        minimum_points=4,
+    )
+    fresh = next(
+        row for row in effects if row["metric"] == "fresh_states_per_update"
+    )
+    assert fresh["analysis_grain"] == "training_iteration"
+    assert fresh["start_iteration"] == 1
+    assert fresh["end_iteration"] == 40
+    assert fresh["valid_points"] == 40
+    assert fresh["availability_status"] == "available"
+    for metric in ("mean_sample_exposure", "mean_sample_age", "p90_sample_age"):
+        effect = next(row for row in effects if row["metric"] == metric)
+        assert effect["valid_points"] == 40
+        assert effect["availability_status"] == "available"
+
+
+def test_early_plateau_has_no_snapshot_effect_points() -> None:
+    replay_rows = [
+        {
+            "iteration": iteration,
+            "incoming_unique_state_ratio": 0.8,
+            "incoming_ratio_left_censored": iteration == 61,
+            "duplicate_rate": 0.2,
+            "state_effective_ratio": 0.8,
+        }
+        for iteration in range(61, 81)
+    ]
+    points = merge.build_replay_iteration_effect_rows(
+        replay_rows,
+        {"plateau_detected": True, "plateau_start_checkpoint": 40},
+    )
+    effects = merge.build_effect_rows(
+        [],
+        points,
+        [],
+        {"plateau_detected": True, "plateau_start_checkpoint": 40},
+    )
+    assert points == []
+    for metric in (
+        "incoming_unique_state_ratio",
+        "duplicate_rate",
+        "state_effective_ratio",
+    ):
+        effect = next(row for row in effects if row["metric"] == metric)
+        assert effect["analysis_grain"] == "replay_iteration"
+        assert effect["valid_points"] == 0
+        assert effect["availability_status"] == "unavailable"
+
+
+def test_early_plateau_keeps_two_point_gap_unavailable() -> None:
+    holdout_rows = [
+        {
+            "checkpoint": checkpoint,
+            "gpu_hours": float(checkpoint),
+            "approx_policy_gap": value,
+            "approx_value_gap": value / 2.0,
+        }
+        for checkpoint, value in ((20, 0.1), (40, 0.2))
+    ]
+    checkpoint_rows = merge.build_checkpoint_effect_rows(
+        holdout_rows,
+        {"plateau_detected": True, "plateau_start_checkpoint": 40},
+    )
+    effects = merge.build_effect_rows(
+        [],
+        [],
+        checkpoint_rows,
+        {"plateau_detected": True, "plateau_start_checkpoint": 40},
+        minimum_points=4,
+    )
+    policy_gap = next(
+        row for row in effects if row["metric"] == "approx_policy_gap"
+    )
+    assert policy_gap["availability_status"] == "unavailable"
+    assert policy_gap["analysis_grain"] == "evaluation_checkpoint"
+    assert policy_gap["start_checkpoint"] == 20
+    assert policy_gap["end_checkpoint"] == 40
+    assert policy_gap["valid_points"] == 2
+
+
+def test_h1_is_partial_when_gap_is_unavailable_but_other_stages_are_consistent() -> None:
+    assert merge.judge_h1(
+        input_status="passed",
+        plateau_detected=True,
+        supply="consistent",
+        replay="consistent",
+        snapshot_diversity="unavailable",
+        generalisation="unavailable",
+        temporal_alignment="consistent_before_or_at_onset",
+    ) == "partially_supported"
+
+
+@pytest.mark.parametrize(
+    ("slope", "endpoint", "expected", "status"),
+    [
+        (-0.1, -0.2, "decrease", "consistent"),
+        (0.1, 0.2, "decrease", "inconsistent"),
+        (-0.1, 0.2, "decrease", "mixed"),
+        (0.0, -0.2, "decrease", "mixed"),
+    ],
+)
+def test_descriptive_direction_uses_slope_and_endpoint(
+    slope: float, endpoint: float, expected: str, status: str
+) -> None:
+    result = merge.classify_metric_direction(slope, endpoint, expected)
+    assert result["effect_status"] == status
+
+
+def test_temporal_alignment_is_limited_at_early_onset() -> None:
+    effects = [
+        {
+            "metric": "fresh_states_per_update",
+            "evidence_stage": "supply",
+            "analysis_grain": "training_iteration",
+            "availability_status": "available",
+            "effect_status": "consistent",
+            "start_iteration": 1,
+            "end_iteration": 40,
+        },
+        {
+            "metric": "mean_sample_age",
+            "evidence_stage": "replay",
+            "analysis_grain": "training_iteration",
+            "availability_status": "available",
+            "effect_status": "consistent",
+            "start_iteration": 1,
+            "end_iteration": 40,
+        },
+    ]
+    result = merge.judge_temporal_alignment(
+        effects,
+        {"plateau_detected": True, "plateau_start_checkpoint": 40},
+    )
+    assert result["status"] == "consistent_before_or_at_onset"
+    assert "not change-point detection" in result["rationale"]
+
+
+def test_h1_v1_1_freezes_source_native_grains_and_observability() -> None:
+    path = SCRIPTS.parent / "configs" / "h1_v1_1.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert config["protocol_id"] == "h1_v1_1"
+    assert config["revision"]["supersedes"] == "h1_v1"
+    assert config["trend_analysis"]["minimum_valid_points"] == 4
+    assert config["trend_analysis"]["method"] == "descriptive_ols"
+    assert config["trend_analysis"]["significance_test"] == "none"
+    assert config["trend_analysis"]["classification"] == {
+        "consistent": "slope_and_endpoint_match_expected_direction",
+        "mixed": "slope_and_endpoint_disagree_or_one_is_flat",
+        "inconsistent": "slope_and_endpoint_both_opposite",
+        "unavailable": "fewer_than_minimum_valid_points",
+    }
+    assert config["effect_output"]["fields"] == list(merge.EFFECT_FIELDS)
+    assert "minimum_valid_checkpoints" not in config["trend_analysis"]
+
+    expected_grains = {
+        "fresh_states_per_update": "training_iteration",
+        "buffer_inflow_fraction": "training_iteration",
+        "states_per_gpu_hour": "training_iteration",
+        "mean_sample_exposure": "training_iteration",
+        "mean_sample_age": "training_iteration",
+        "p90_sample_age": "training_iteration",
+        "incoming_unique_state_ratio": "replay_iteration",
+        "duplicate_rate": "replay_iteration",
+        "state_effective_ratio": "replay_iteration",
+        "approx_policy_gap": "evaluation_checkpoint",
+        "approx_value_gap": "evaluation_checkpoint",
+    }
+    assert {
+        metric: config["metrics"][metric]["analysis_grain"]
+        for metric in expected_grains
+    } == expected_grains
+    assert {
+        metric: config["metrics"][metric]["eligible_iteration_start"]
+        for metric in (
+            "mean_sample_exposure",
+            "mean_sample_age",
+            "p90_sample_age",
+            "incoming_unique_state_ratio",
+            "duplicate_rate",
+            "state_effective_ratio",
+            "turnover_fraction",
+        )
+    } == {
+        "mean_sample_exposure": 1,
+        "mean_sample_age": 1,
+        "p90_sample_age": 1,
+        "incoming_unique_state_ratio": 61,
+        "duplicate_rate": 61,
+        "state_effective_ratio": 61,
+        "turnover_fraction": 151,
+    }
+    assert config["outputs"]["root"] == (
+        "outputs/baseline_seed1001_4090_analysis/h1_v1_1"
+    )

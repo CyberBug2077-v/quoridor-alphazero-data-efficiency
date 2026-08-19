@@ -14,13 +14,26 @@ import yaml
 
 
 BASELINE_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_H1_CONFIG = BASELINE_ROOT / "analysis" / "configs" / "h1_v1.yaml"
+DEFAULT_H1_CONFIG = BASELINE_ROOT / "analysis" / "configs" / "h1_v1_1.yaml"
 
 FIXED_OPPONENT_SCORE_COLUMNS = (
     "heuristic_20_score",
     "heuristic_200_score",
     "greedy_random_50_score",
     "random_score",
+)
+
+TRAINING_REPLAY_PROXY_FIELDS = (
+    "mean_sample_exposure",
+    "selected_sample_reuse",
+    "mean_sample_age",
+    "p90_sample_age",
+)
+
+SNAPSHOT_REPLAY_FIELDS = (
+    "incoming_unique_state_ratio",
+    "duplicate_rate",
+    "state_effective_ratio",
 )
 
 ALIGNED_FIELDS = (
@@ -75,37 +88,42 @@ ALIGNED_FIELDS = (
 EFFECT_FIELDS = (
     "evidence_stage",
     "metric",
+    "analysis_grain",
     "analysis_mode",
+    "start_iteration",
+    "end_iteration",
     "start_checkpoint",
     "end_checkpoint",
-    "valid_checkpoints",
+    "valid_points",
     "start_value",
     "end_value",
     "absolute_change",
     "relative_change",
+    "ols_slope_per_iteration",
     "slope_per_20_iterations",
     "slope_per_gpu_hour",
     "expected_direction",
-    "actual_direction",
-    "direction_consistent",
+    "slope_direction",
+    "endpoint_direction",
+    "effect_status",
     "availability_status",
     "limitation",
 )
 
 EFFECT_SPECS = (
-    ("supply", "fresh_states_per_update", "decrease"),
-    ("supply", "buffer_inflow_fraction", "decrease"),
-    ("supply", "states_per_gpu_hour", "not_increase"),
-    ("replay", "mean_sample_exposure", "increase"),
-    ("replay", "mean_sample_age", "increase"),
-    ("replay", "p90_sample_age", "increase"),
-    ("replay", "turnover_fraction", "decrease"),
-    ("replay", "duplicate_rate", "increase"),
-    ("replay", "incoming_unique_state_ratio", "decrease"),
-    ("replay", "state_effective_ratio", "decrease"),
-    ("generalisation", "approx_policy_gap", "increase"),
-    ("generalisation", "approx_value_gap", "increase"),
-    ("generalisation", "approx_total_gap", "increase"),
+    ("supply", "fresh_states_per_update", "decrease", "training_iteration"),
+    ("supply", "buffer_inflow_fraction", "decrease", "training_iteration"),
+    ("supply", "states_per_gpu_hour", "not_increase", "training_iteration"),
+    ("replay", "mean_sample_exposure", "increase", "training_iteration"),
+    ("replay", "mean_sample_age", "increase", "training_iteration"),
+    ("replay", "p90_sample_age", "increase", "training_iteration"),
+    ("replay", "turnover_fraction", "decrease", "training_iteration"),
+    ("snapshot_diversity", "duplicate_rate", "increase", "replay_iteration"),
+    ("snapshot_diversity", "incoming_unique_state_ratio", "decrease", "replay_iteration"),
+    ("snapshot_diversity", "state_effective_ratio", "decrease", "replay_iteration"),
+    ("generalisation", "approx_policy_gap", "increase", "evaluation_checkpoint"),
+    ("generalisation", "approx_value_gap", "increase", "evaluation_checkpoint"),
+    ("generalisation", "approx_total_gap", "increase", "evaluation_checkpoint"),
 )
 
 
@@ -635,15 +653,8 @@ def apply_observability_rules(
     """Apply the registered null and left-truncation rules without imputation."""
     output: list[dict[str, Any]] = []
     gap_fields = ("approx_policy_gap", "approx_value_gap", "approx_total_gap")
-    replay_fields = (
-        "mean_sample_exposure",
-        "selected_sample_reuse",
-        "mean_sample_age",
-        "p90_sample_age",
-        "incoming_unique_state_ratio",
-        "duplicate_rate",
-        "state_effective_ratio",
-    )
+    # Training-log proxies exist from iteration 1 and are intentionally not
+    # subject to the final replay snapshot's iteration-61 left truncation.
     for source in rows:
         row = dict(source)
         checkpoint = _required_int(row.get("checkpoint"), "checkpoint")
@@ -651,7 +662,7 @@ def apply_observability_rules(
             for field in gap_fields:
                 row[field] = None
         if checkpoint < 61:
-            for field in replay_fields:
+            for field in SNAPSHOT_REPLAY_FIELDS:
                 row[field] = None
             row["replay_observable"] = False
         if checkpoint < 151:
@@ -782,14 +793,14 @@ def validate_aligned_table(
         if checkpoint < 61 and any(
             row.get(field) is not None
             for field in (
-                "mean_sample_exposure",
-                "mean_sample_age",
-                "p90_sample_age",
                 "incoming_unique_state_ratio",
                 "duplicate_rate",
+                "state_effective_ratio",
             )
         ):
-            raise H1InputError("replay metrics before iteration 61 must be null")
+            raise H1InputError(
+                "snapshot replay metrics before iteration 61 must be null"
+            )
         if checkpoint < 151 and row.get("turnover_fraction") is not None:
             raise H1InputError("turnover before iteration 151 must be unobservable")
     final = rows[-1]
@@ -966,126 +977,369 @@ def _ols_slope(xs: Sequence[float], ys: Sequence[float]) -> float | None:
     ) / denominator
 
 
+def _plateau_start_checkpoint(
+    plateau_result: Mapping[str, Any],
+) -> int | None:
+    if plateau_result.get("plateau_detected") is not True:
+        return None
+    value = plateau_result.get(
+        "plateau_start_checkpoint", plateau_result.get("plateau_iteration")
+    )
+    return _required_int(value, "plateau_start_checkpoint")
+
+
+def _ratio_value(
+    row: Mapping[str, Any], numerator: str, denominator: str, scale: float = 1.0
+) -> float | None:
+    numerator_value = _required_float(row.get(numerator), numerator)
+    denominator_value = _required_float(row.get(denominator), denominator)
+    if denominator_value == 0.0:
+        return None
+    return numerator_value / denominator_value * scale
+
+
+def _effect_point(
+    *,
+    metric: str,
+    analysis_grain: str,
+    value: float | None,
+    x_iteration: int | None = None,
+    x_checkpoint: int | None = None,
+    x_gpu_hours: float | None = None,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        "metric": metric,
+        "analysis_grain": analysis_grain,
+        "x_iteration": x_iteration,
+        "x_checkpoint": x_checkpoint,
+        "x_gpu_hours": x_gpu_hours,
+        "value": value,
+    }
+
+
+def build_training_iteration_effect_rows(
+    raw_metrics: Sequence[Mapping[str, Any]],
+    derived_metrics: Sequence[Mapping[str, Any]],
+    plateau_result: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    raw_by_iteration = _index_iterations(raw_metrics, "raw metric")
+    derived_by_iteration = _index_iterations(derived_metrics, "derived metric")
+    if set(raw_by_iteration) != set(derived_by_iteration):
+        raise H1InputError("raw and derived iteration sets differ")
+    plateau_start = _plateau_start_checkpoint(plateau_result)
+    maximum_iteration = plateau_start if plateau_start is not None else max(
+        raw_by_iteration, default=0
+    )
+    points: list[dict[str, Any]] = []
+    for iteration in sorted(raw_by_iteration):
+        if iteration > maximum_iteration:
+            continue
+        raw = raw_by_iteration[iteration]
+        derived = derived_by_iteration[iteration]
+        if _required_int(
+            raw.get("positions_generated"), "raw positions_generated"
+        ) != _required_int(
+            derived.get("positions_generated"), "derived positions_generated"
+        ):
+            raise H1InputError(
+                f"raw and derived positions differ at iteration {iteration}"
+            )
+        gpu_hours = _optional_float(
+            raw.get("cumulative_gpu_hours"), "cumulative_gpu_hours"
+        )
+        values = {
+            "fresh_states_per_update": _ratio_value(
+                raw, "positions_generated", "optimizer_steps"
+            ),
+            "buffer_inflow_fraction": _ratio_value(
+                raw, "positions_generated", "replay_buffer_size"
+            ),
+            "states_per_gpu_hour": _ratio_value(
+                raw, "positions_generated", "iteration_seconds", 3600.0
+            ),
+            "mean_sample_exposure": _ratio_value(
+                raw, "samples_seen", "replay_buffer_size"
+            ),
+            "mean_sample_age": _optional_float(
+                derived.get("mean_sample_age"), "mean_sample_age"
+            ),
+            "p90_sample_age": _optional_float(
+                derived.get("p90_sample_age"), "p90_sample_age"
+            ),
+            "turnover_fraction": (
+                _optional_float(
+                    derived.get("turnover_fraction"), "turnover_fraction"
+                )
+                if iteration >= 151
+                else None
+            ),
+        }
+        for metric, value in values.items():
+            point = _effect_point(
+                metric=metric,
+                analysis_grain="training_iteration",
+                x_iteration=iteration,
+                x_gpu_hours=gpu_hours,
+                value=value,
+            )
+            if point is not None:
+                points.append(point)
+    return points
+
+
+def build_replay_iteration_effect_rows(
+    replay_metrics: Sequence[Mapping[str, Any]],
+    plateau_result: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    replay_by_iteration = _index_iterations(replay_metrics, "replay metric")
+    plateau_start = _plateau_start_checkpoint(plateau_result)
+    maximum_iteration = plateau_start if plateau_start is not None else max(
+        replay_by_iteration, default=0
+    )
+    points: list[dict[str, Any]] = []
+    for iteration in sorted(replay_by_iteration):
+        if iteration < 61 or iteration > maximum_iteration:
+            continue
+        row = replay_by_iteration[iteration]
+        values = {
+            "incoming_unique_state_ratio": (
+                None
+                if _as_bool(
+                    row.get("incoming_ratio_left_censored"),
+                    "incoming_ratio_left_censored",
+                )
+                else _optional_float(
+                    row.get("incoming_unique_state_ratio"),
+                    "incoming_unique_state_ratio",
+                )
+            ),
+            "duplicate_rate": _optional_float(
+                row.get("duplicate_rate"), "duplicate_rate"
+            ),
+            "state_effective_ratio": _optional_float(
+                row.get("state_effective_ratio"), "state_effective_ratio"
+            ),
+        }
+        for metric, value in values.items():
+            point = _effect_point(
+                metric=metric,
+                analysis_grain="replay_iteration",
+                x_iteration=iteration,
+                value=value,
+            )
+            if point is not None:
+                points.append(point)
+    return points
+
+
+def build_checkpoint_effect_rows(
+    holdout_rows: Sequence[Mapping[str, Any]],
+    plateau_result: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    holdout_by_checkpoint = _index_checkpoints(holdout_rows, "holdout")
+    plateau_start = _plateau_start_checkpoint(plateau_result)
+    maximum_checkpoint = plateau_start if plateau_start is not None else max(
+        holdout_by_checkpoint, default=0
+    )
+    points: list[dict[str, Any]] = []
+    for checkpoint in sorted(holdout_by_checkpoint):
+        if checkpoint == 0 or checkpoint > maximum_checkpoint:
+            continue
+        row = holdout_by_checkpoint[checkpoint]
+        policy_gap = _optional_float(row.get("approx_policy_gap"), "approx_policy_gap")
+        value_gap = _optional_float(row.get("approx_value_gap"), "approx_value_gap")
+        values = {
+            "approx_policy_gap": policy_gap,
+            "approx_value_gap": value_gap,
+            "approx_total_gap": (
+                None
+                if policy_gap is None or value_gap is None
+                else policy_gap + value_gap
+            ),
+        }
+        gpu_hours = _optional_float(row.get("gpu_hours"), "gpu_hours")
+        for metric, value in values.items():
+            point = _effect_point(
+                metric=metric,
+                analysis_grain="evaluation_checkpoint",
+                x_checkpoint=checkpoint,
+                x_gpu_hours=gpu_hours,
+                value=value,
+            )
+            if point is not None:
+                points.append(point)
+    return points
+
+
 def select_pre_plateau_range(
     rows: Sequence[Mapping[str, Any]],
     metric: str,
+    analysis_grain: str,
     plateau_result: Mapping[str, Any],
     minimum_points: int = 4,
 ) -> dict[str, Any]:
-    plateau_detected = plateau_result.get("plateau_detected") is True
-    plateau_checkpoint = (
-        _required_int(plateau_result.get("plateau_iteration"), "plateau_iteration")
-        if plateau_detected
-        else None
-    )
-    eligible = [
+    points = [
         row
         for row in rows
-        if row.get(metric) not in (None, "")
-        and (
-            plateau_checkpoint is None
-            or _required_int(row.get("checkpoint"), "checkpoint") <= plateau_checkpoint
-        )
+        if row.get("metric") == metric
+        and row.get("analysis_grain") == analysis_grain
+        and row.get("value") not in (None, "")
     ]
-    mode = "pre_plateau" if plateau_detected else "descriptive_full_run"
-    limitation = ""
-    if not plateau_detected:
-        limitation = (
+    coordinate = (
+        "x_checkpoint"
+        if analysis_grain == "evaluation_checkpoint"
+        else "x_iteration"
+    )
+    points.sort(key=lambda row: _required_int(row.get(coordinate), coordinate))
+    mode = (
+        "pre_plateau"
+        if plateau_result.get("plateau_detected") is True
+        else "descriptive_full_run"
+    )
+    limitations = []
+    if mode == "descriptive_full_run":
+        limitations.append(
             "Plateau was not reproduced; the full-run effect is descriptive only."
         )
-    if len(eligible) < minimum_points:
-        shortfall = (
-            f"Only {len(eligible)} valid checkpoints are available; "
-            f"at least {minimum_points} are required."
+    if len(points) < minimum_points:
+        limitations.append(
+            f"Only {len(points)} valid points are available; at least {minimum_points} are required."
         )
-        limitation = f"{limitation} {shortfall}".strip()
     return {
         "metric": metric,
+        "analysis_grain": analysis_grain,
         "analysis_mode": mode,
-        "rows": eligible,
+        "rows": points,
         "availability_status": (
-            "available" if len(eligible) >= minimum_points else "unavailable"
+            "available" if len(points) >= minimum_points else "unavailable"
         ),
-        "limitation": limitation,
+        "limitation": " ".join(limitations),
+    }
+
+
+def _direction(value: float | None, tolerance: float = 1e-12) -> str | None:
+    if value is None:
+        return None
+    if value > tolerance:
+        return "increase"
+    if value < -tolerance:
+        return "decrease"
+    return "flat"
+
+
+def classify_metric_direction(
+    slope: float | None,
+    endpoint_change: float | None,
+    expected_direction: str,
+    *,
+    available: bool = True,
+) -> dict[str, Any]:
+    slope_direction = _direction(slope)
+    endpoint_direction = _direction(endpoint_change)
+    if not available or slope_direction is None or endpoint_direction is None:
+        return {
+            "slope_direction": slope_direction,
+            "endpoint_direction": endpoint_direction,
+            "effect_status": "unavailable",
+        }
+    if expected_direction not in {"increase", "decrease", "not_increase"}:
+        raise H1InputError(f"unsupported expected direction: {expected_direction}")
+    expected = "decrease" if expected_direction == "not_increase" else expected_direction
+    opposite = "decrease" if expected == "increase" else "increase"
+    if slope_direction == expected and endpoint_direction == expected:
+        status = "consistent"
+    elif slope_direction == opposite and endpoint_direction == opposite:
+        status = "inconsistent"
+    else:
+        status = "mixed"
+    return {
+        "slope_direction": slope_direction,
+        "endpoint_direction": endpoint_direction,
+        "effect_status": status,
     }
 
 
 def calculate_metric_effect(
-    selected: Mapping[str, Any], metric: str
+    selected: Mapping[str, Any], metric: str, expected_direction: str
 ) -> dict[str, Any]:
     points = list(selected.get("rows", []))
+    grain = str(selected.get("analysis_grain"))
+    coordinate = "x_checkpoint" if grain == "evaluation_checkpoint" else "x_iteration"
+    available = selected.get("availability_status") == "available"
     if not points:
         return {
+            "start_iteration": None,
+            "end_iteration": None,
             "start_checkpoint": None,
             "end_checkpoint": None,
-            "valid_checkpoints": len(points),
+            "valid_points": 0,
             "start_value": None,
             "end_value": None,
             "absolute_change": None,
             "relative_change": None,
+            "ols_slope_per_iteration": None,
             "slope_per_20_iterations": None,
             "slope_per_gpu_hour": None,
+            **classify_metric_direction(
+                None, None, expected_direction, available=False
+            ),
         }
     start = points[0]
     end = points[-1]
-    start_value = _required_float(start.get(metric), metric)
-    end_value = _required_float(end.get(metric), metric)
-    if selected.get("availability_status") == "available":
-        checkpoints = [
-            float(_required_int(row.get("checkpoint"), "checkpoint")) for row in points
-        ]
-        values = [_required_float(row.get(metric), metric) for row in points]
-        iteration_slope = _ols_slope(checkpoints, values)
+    start_value = _required_float(start.get("value"), metric)
+    end_value = _required_float(end.get("value"), metric)
+    endpoint_change = end_value - start_value
+    if available:
+        xs = [float(_required_int(row.get(coordinate), coordinate)) for row in points]
+        values = [_required_float(row.get("value"), metric) for row in points]
+        slope = _ols_slope(xs, values)
         gpu_points = [
-            (row.get("training_gpu_hours"), row.get(metric))
-            for row in points
-            if row.get("training_gpu_hours") not in (None, "")
+            row for row in points if row.get("x_gpu_hours") not in (None, "")
         ]
         gpu_slope = _ols_slope(
-            [_required_float(value[0], "training_gpu_hours") for value in gpu_points],
-            [_required_float(value[1], metric) for value in gpu_points],
+            [_required_float(row.get("x_gpu_hours"), "x_gpu_hours") for row in gpu_points],
+            [_required_float(row.get("value"), metric) for row in gpu_points],
         )
     else:
-        iteration_slope = None
+        slope = None
         gpu_slope = None
     return {
-        "start_checkpoint": _required_int(start.get("checkpoint"), "checkpoint"),
-        "end_checkpoint": _required_int(end.get("checkpoint"), "checkpoint"),
-        "valid_checkpoints": len(points),
+        "start_iteration": (
+            _required_int(start.get("x_iteration"), "x_iteration")
+            if grain != "evaluation_checkpoint"
+            else None
+        ),
+        "end_iteration": (
+            _required_int(end.get("x_iteration"), "x_iteration")
+            if grain != "evaluation_checkpoint"
+            else None
+        ),
+        "start_checkpoint": (
+            _required_int(start.get("x_checkpoint"), "x_checkpoint")
+            if grain == "evaluation_checkpoint"
+            else None
+        ),
+        "end_checkpoint": (
+            _required_int(end.get("x_checkpoint"), "x_checkpoint")
+            if grain == "evaluation_checkpoint"
+            else None
+        ),
+        "valid_points": len(points),
         "start_value": start_value,
         "end_value": end_value,
-        "absolute_change": end_value - start_value,
+        "absolute_change": endpoint_change,
         "relative_change": (
-            None if start_value == 0.0 else (end_value - start_value) / abs(start_value)
+            None if start_value == 0.0 else endpoint_change / abs(start_value)
         ),
-        "slope_per_20_iterations": (
-            None if iteration_slope is None else iteration_slope * 20.0
-        ),
+        "ols_slope_per_iteration": slope,
+        "slope_per_20_iterations": None if slope is None else slope * 20.0,
         "slope_per_gpu_hour": gpu_slope,
+        **classify_metric_direction(
+            slope, endpoint_change, expected_direction, available=available
+        ),
     }
-
-
-def classify_metric_direction(
-    change: float | None, expected_direction: str
-) -> dict[str, Any]:
-    if change is None:
-        return {"actual_direction": None, "direction_consistent": None}
-    tolerance = 1e-12
-    if change > tolerance:
-        actual = "increase"
-    elif change < -tolerance:
-        actual = "decrease"
-    else:
-        actual = "flat"
-    if expected_direction == "increase":
-        consistent = actual == "increase"
-    elif expected_direction == "decrease":
-        consistent = actual == "decrease"
-    elif expected_direction == "not_increase":
-        consistent = actual in {"decrease", "flat"}
-    else:
-        raise H1InputError(f"unsupported expected direction: {expected_direction}")
-    return {"actual_direction": actual, "direction_consistent": consistent}
 
 
 def _metric_limitation(metric: str) -> str:
@@ -1094,50 +1348,47 @@ def _metric_limitation(metric: str) -> str:
     if metric == "turnover_fraction":
         return "Turnover is interpretable only from iteration 151 after the buffer fills."
     if metric in {
-        "mean_sample_exposure",
-        "mean_sample_age",
-        "p90_sample_age",
         "incoming_unique_state_ratio",
         "duplicate_rate",
         "state_effective_ratio",
     }:
-        return "Replay evidence is left-truncated at retained iteration 61."
+        return "Final-snapshot replay evidence is left-truncated at retained iteration 61."
     return ""
 
 
 def build_effect_rows(
-    rows: Sequence[Mapping[str, Any]],
+    training_iteration_rows: Sequence[Mapping[str, Any]],
+    replay_iteration_rows: Sequence[Mapping[str, Any]],
+    checkpoint_rows: Sequence[Mapping[str, Any]],
     plateau_result: Mapping[str, Any],
     minimum_points: int = 4,
 ) -> list[dict[str, Any]]:
+    sources = {
+        "training_iteration": training_iteration_rows,
+        "replay_iteration": replay_iteration_rows,
+        "evaluation_checkpoint": checkpoint_rows,
+    }
     effects: list[dict[str, Any]] = []
-    for stage, metric, expected in EFFECT_SPECS:
+    for stage, metric, expected, grain in EFFECT_SPECS:
         selected = select_pre_plateau_range(
-            rows, metric, plateau_result, minimum_points=minimum_points
+            sources[grain],
+            metric,
+            grain,
+            plateau_result,
+            minimum_points=minimum_points,
         )
-        effect = calculate_metric_effect(selected, metric)
-        direction = classify_metric_direction(
-            (
-                effect["absolute_change"]
-                if selected["availability_status"] == "available"
-                else None
-            ),
-            expected,
-        )
+        effect = calculate_metric_effect(selected, metric, expected)
         limitations = [selected.get("limitation", ""), _metric_limitation(metric)]
-        if any(
-            _required_int(row.get("checkpoint"), "checkpoint") == 210
-            for row in selected.get("rows", [])
-        ):
+        if grain == "evaluation_checkpoint" and effect.get("end_checkpoint") == 210:
             limitations.append("Checkpoint 210 represents a 10-iteration block.")
         effects.append(
             {
                 "evidence_stage": stage,
                 "metric": metric,
+                "analysis_grain": grain,
                 "analysis_mode": selected["analysis_mode"],
                 **effect,
                 "expected_direction": expected,
-                **direction,
                 "availability_status": selected["availability_status"],
                 "limitation": " ".join(value for value in limitations if value),
             }
@@ -1154,25 +1405,33 @@ def _effect_by_metric(
     return matches[0] if matches else None
 
 
-def _metric_evidence(
+def _metric_effect_status(
     effects: Sequence[Mapping[str, Any]], metric: str
-) -> bool | None:
+) -> str:
     row = _effect_by_metric(effects, metric)
-    if row is None or row.get("availability_status") != "available":
-        return None
-    value = row.get("direction_consistent")
-    if value is None or isinstance(value, bool):
-        return value
-    return _as_bool(value, f"{metric} direction_consistent")
+    if row is None:
+        return "unavailable"
+    status = row.get("effect_status")
+    if status not in {"consistent", "mixed", "inconsistent", "unavailable"}:
+        raise H1InputError(f"invalid effect status for {metric}: {status}")
+    return str(status)
 
 
 def _stage_result(
     stage: str,
     status: str,
-    metrics: Mapping[str, bool | None],
+    metrics: Mapping[str, Any],
     rationale: str,
 ) -> dict[str, Any]:
-    if status not in {"consistent", "mixed", "inconsistent", "unavailable"}:
+    allowed = {
+        "consistent",
+        "mixed",
+        "inconsistent",
+        "unavailable",
+        "consistent_before_or_at_onset",
+        "post_onset_only",
+    }
+    if status not in allowed:
         raise H1InputError(f"invalid stage status: {status}")
     return {
         "stage": stage,
@@ -1186,7 +1445,7 @@ def judge_fresh_state_supply(
     effects: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     metrics = {
-        metric: _metric_evidence(effects, metric)
+        metric: _metric_effect_status(effects, metric)
         for metric in (
             "fresh_states_per_update",
             "buffer_inflow_fraction",
@@ -1195,20 +1454,24 @@ def judge_fresh_state_supply(
     }
     core = metrics["fresh_states_per_update"]
     supplements = [
-        value for key, value in metrics.items() if key != "fresh_states_per_update" and value is not None
+        value
+        for key, value in metrics.items()
+        if key != "fresh_states_per_update" and value != "unavailable"
     ]
-    if core is None:
+    if core == "unavailable":
         status = "unavailable"
-        rationale = "The core fresh-states-per-update effect has fewer than four valid checkpoints."
-    elif core is False:
+        rationale = "The core fresh-states-per-update effect has fewer than four valid points."
+    elif core == "inconsistent":
         status = "inconsistent"
         rationale = "The core fresh-states-per-update metric moves opposite to H1."
-    elif any(value is False for value in supplements):
+    elif core == "mixed" or any(
+        value in {"mixed", "inconsistent"} for value in supplements
+    ):
         status = "mixed"
-        rationale = "The core supply metric is consistent, but a supporting efficiency metric is not."
+        rationale = "The core supply trend or an available efficiency supplement is mixed."
     else:
         status = "consistent"
-        rationale = "The core supply metric decreases without contradictory available supplements."
+        rationale = "The core supply trend and available supplements move as expected."
     return _stage_result("fresh_state_supply", status, metrics, rationale)
 
 
@@ -1222,27 +1485,26 @@ def judge_replay_pressure(
     )
     supplemental_names = (
         "turnover_fraction",
-        "duplicate_rate",
-        "incoming_unique_state_ratio",
-        "state_effective_ratio",
     )
     metrics = {
-        metric: _metric_evidence(effects, metric)
+        metric: _metric_effect_status(effects, metric)
         for metric in core_names + supplemental_names
     }
-    core = [metrics[name] for name in core_names if metrics[name] is not None]
+    core = [metrics[name] for name in core_names if metrics[name] != "unavailable"]
     supplements = [
-        metrics[name] for name in supplemental_names if metrics[name] is not None
+        metrics[name]
+        for name in supplemental_names
+        if metrics[name] != "unavailable"
     ]
     if not core:
         status = "unavailable"
-        rationale = "No replay-pressure core metric has four valid checkpoints."
-    elif all(value is True for value in core) and not any(
-        value is False for value in supplements
+        rationale = "No replay-pressure proxy has four valid iteration points."
+    elif all(value == "consistent" for value in core) and not any(
+        value in {"mixed", "inconsistent"} for value in supplements
     ):
         status = "consistent"
         rationale = "Exposure and available sample-age evidence rise as expected."
-    elif all(value is False for value in core):
+    elif all(value == "inconsistent" for value in core):
         status = "inconsistent"
         rationale = "All available replay-pressure core metrics move opposite to H1."
     else:
@@ -1251,19 +1513,44 @@ def judge_replay_pressure(
     return _stage_result("replay_pressure", status, metrics, rationale)
 
 
+def judge_snapshot_diversity(
+    effects: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    names = (
+        "duplicate_rate",
+        "incoming_unique_state_ratio",
+        "state_effective_ratio",
+    )
+    metrics = {metric: _metric_effect_status(effects, metric) for metric in names}
+    available = [value for value in metrics.values() if value != "unavailable"]
+    if not available:
+        status = "unavailable"
+        rationale = "The plateau precedes the final snapshot's retained iteration 61 boundary."
+    elif all(value == "consistent" for value in available):
+        status = "consistent"
+        rationale = "Available snapshot diversity metrics move as expected."
+    elif all(value == "inconsistent" for value in available):
+        status = "inconsistent"
+        rationale = "Available snapshot diversity metrics move opposite to H1."
+    else:
+        status = "mixed"
+        rationale = "Available snapshot diversity metrics disagree."
+    return _stage_result("snapshot_diversity", status, metrics, rationale)
+
+
 def judge_generalisation(
     effects: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     names = ("approx_policy_gap", "approx_value_gap", "approx_total_gap")
-    metrics = {metric: _metric_evidence(effects, metric) for metric in names}
-    primary = [metrics[name] for name in names[:2] if metrics[name] is not None]
+    metrics = {metric: _metric_effect_status(effects, metric) for metric in names}
+    primary = [metrics[name] for name in names[:2] if metrics[name] != "unavailable"]
     if not primary:
         status = "unavailable"
         rationale = "The approximate online train–hold-out gaps have fewer than four valid checkpoints."
-    elif all(value is True for value in primary):
+    elif all(value == "consistent" for value in primary):
         status = "consistent"
         rationale = "The available approximate online train–hold-out gaps widen."
-    elif all(value is False for value in primary):
+    elif all(value == "inconsistent" for value in primary):
         status = "inconsistent"
         rationale = "The available approximate online train–hold-out gaps narrow."
     else:
@@ -1272,49 +1559,78 @@ def judge_generalisation(
     return _stage_result("generalisation", status, metrics, rationale)
 
 
-def judge_temporal_order(
+def judge_temporal_alignment(
     effects: Sequence[Mapping[str, Any]],
     plateau_result: Mapping[str, Any],
 ) -> dict[str, Any]:
     if plateau_result.get("plateau_detected") is not True:
         return _stage_result(
-            "temporal_order",
+            "temporal_alignment",
             "unavailable",
             {},
-            "Temporal order cannot be judged because the plateau was not reproduced.",
+            "Temporal alignment cannot be judged because the plateau was not reproduced.",
         )
-    plateau_checkpoint = _required_int(
-        plateau_result.get("plateau_iteration"), "plateau_iteration"
-    )
+    plateau_checkpoint = _plateau_start_checkpoint(plateau_result)
+    if plateau_checkpoint is None:
+        raise H1InputError("detected plateau has no onset checkpoint")
     signal_rows = [
         row
         for row in effects
         if row.get("availability_status") == "available"
-        and row.get("direction_consistent") is True
-        and row.get("end_checkpoint") not in (None, "")
+        and row.get("effect_status") == "consistent"
+        and row.get("evidence_stage") in {"supply", "replay", "snapshot_diversity"}
     ]
-    checkpoints = {
-        str(row.get("metric")): _required_int(
-            row.get("end_checkpoint"), "end_checkpoint"
+    locations: dict[str, str] = {}
+    for row in signal_rows:
+        end_value = (
+            row.get("end_iteration")
+            if row.get("analysis_grain") != "evaluation_checkpoint"
+            else row.get("end_checkpoint")
         )
-        for row in signal_rows
-    }
-    if not checkpoints:
-        status = "unavailable"
-        rationale = "No diagnostic trend has four valid points on which to locate an H1-consistent signal."
-    elif all(value <= plateau_checkpoint for value in checkpoints.values()):
-        status = "consistent"
-        relation = "before" if any(
-            value < plateau_checkpoint for value in checkpoints.values()
-        ) else "at"
-        rationale = f"Available diagnostic signals appear {relation} or no later than the plateau start."
-    elif all(value > plateau_checkpoint for value in checkpoints.values()):
-        status = "inconsistent"
-        rationale = "Available diagnostic signals appear only after the plateau start."
-    else:
+        start_value = (
+            row.get("start_iteration")
+            if row.get("analysis_grain") != "evaluation_checkpoint"
+            else row.get("start_checkpoint")
+        )
+        if end_value in (None, "") or start_value in (None, ""):
+            continue
+        start_coordinate = _required_int(start_value, "effect start coordinate")
+        end_coordinate = _required_int(end_value, "effect end coordinate")
+        locations[str(row.get("metric"))] = (
+            "before_or_at_onset"
+            if end_coordinate <= plateau_checkpoint
+            else "post_onset"
+            if start_coordinate > plateau_checkpoint
+            else "spans_onset"
+        )
+    available_diagnostics = [
+        row
+        for row in effects
+        if row.get("availability_status") == "available"
+        and row.get("evidence_stage") in {"supply", "replay", "snapshot_diversity"}
+    ]
+    location_values = set(locations.values())
+    if "before_or_at_onset" in location_values and location_values <= {
+        "before_or_at_onset"
+    }:
+        status = "consistent_before_or_at_onset"
+        rationale = (
+            "H1-consistent diagnostic trends are observable using only data at or before "
+            "the plateau onset; this is limited alignment, not change-point detection."
+        )
+    elif location_values and location_values <= {"post_onset"}:
+        status = "post_onset_only"
+        rationale = "H1-consistent diagnostic trends are observable only after plateau onset."
+    elif location_values:
         status = "mixed"
-        rationale = "Available diagnostic signals occur on both sides of the plateau start."
-    return _stage_result("temporal_order", status, checkpoints, rationale)
+        rationale = "H1-consistent diagnostic trends have mixed alignment around plateau onset."
+    elif available_diagnostics:
+        status = "mixed"
+        rationale = "Pre-onset diagnostic trends are available but none is consistently H1-aligned."
+    else:
+        status = "unavailable"
+        rationale = "No diagnostic trend has four valid points for temporal alignment."
+    return _stage_result("temporal_alignment", status, locations, rationale)
 
 
 def _status_value(value: str | Mapping[str, Any]) -> str:
@@ -1326,36 +1642,49 @@ def _status_value(value: str | Mapping[str, Any]) -> str:
     return status
 
 
+def _normalised_stage_status(value: str | Mapping[str, Any]) -> str:
+    status = _status_value(value)
+    if status == "consistent_before_or_at_onset":
+        return "consistent"
+    if status == "post_onset_only":
+        return "inconsistent"
+    return status
+
+
 def judge_h1(
     *,
     input_status: str,
     plateau_detected: bool,
     supply: str | Mapping[str, Any],
     replay: str | Mapping[str, Any],
+    snapshot_diversity: str | Mapping[str, Any],
     generalisation: str | Mapping[str, Any],
-    temporal_order: str | Mapping[str, Any],
+    temporal_alignment: str | Mapping[str, Any],
 ) -> str:
     if input_status != "passed" or not plateau_detected:
         return "not_assessable"
     statuses = {
-        "supply": _status_value(supply),
-        "replay": _status_value(replay),
-        "generalisation": _status_value(generalisation),
-        "temporal_order": _status_value(temporal_order),
+        "supply": _normalised_stage_status(supply),
+        "replay": _normalised_stage_status(replay),
+        "snapshot_diversity": _normalised_stage_status(snapshot_diversity),
+        "generalisation": _normalised_stage_status(generalisation),
+        "temporal_alignment": _normalised_stage_status(temporal_alignment),
     }
+    if statuses["supply"] == "unavailable":
+        return "not_assessable"
     if statuses["supply"] == "inconsistent":
         return "not_supported"
     if all(value == "consistent" for value in statuses.values()):
         return "supported_with_limitations"
-    if sum(value == "inconsistent" for value in statuses.values()) >= 2:
+    primary_others = (
+        statuses["replay"],
+        statuses["generalisation"],
+        statuses["temporal_alignment"],
+    )
+    if sum(value == "inconsistent" for value in primary_others) >= 2:
         return "not_supported"
-    if statuses["supply"] == "consistent" and any(
-        statuses[name] in {"mixed", "unavailable"}
-        for name in ("replay", "generalisation", "temporal_order")
-    ):
+    if statuses["supply"] in {"consistent", "mixed"}:
         return "partially_supported"
-    if statuses["supply"] == "unavailable":
-        return "not_assessable"
     return "partially_supported"
 
 
@@ -1365,6 +1694,7 @@ def build_h1_decision(
     plateau_result: Mapping[str, Any],
     stages: Mapping[str, Mapping[str, Any]],
     maximum_drawdown: Mapping[str, Any] | None,
+    analysis_id: str = "h1_v1_1",
 ) -> dict[str, Any]:
     plateau_detected = plateau_result.get("plateau_detected") is True
     status = judge_h1(
@@ -1372,12 +1702,13 @@ def build_h1_decision(
         plateau_detected=plateau_detected,
         supply=stages["fresh_state_supply"],
         replay=stages["replay_pressure"],
+        snapshot_diversity=stages["snapshot_diversity"],
         generalisation=stages["generalisation"],
-        temporal_order=stages["temporal_order"],
+        temporal_alignment=stages["temporal_alignment"],
     )
     return {
         "schema_version": 1,
-        "analysis_id": "h1_v1",
+        "analysis_id": analysis_id,
         "hypothesis": "H1",
         "status": status,
         "analysis_mode": (
@@ -1389,7 +1720,12 @@ def build_h1_decision(
         "plateau": {
             "status": plateau_result.get("status"),
             "detected": plateau_detected,
-            "start_checkpoint": plateau_result.get("plateau_iteration"),
+            "start_checkpoint": plateau_result.get(
+                "plateau_start_checkpoint", plateau_result.get("plateau_iteration")
+            ),
+            "confirmation_checkpoint": plateau_result.get(
+                "plateau_confirmation_checkpoint"
+            ),
         },
         "evidence_stages": dict(stages),
         "maximum_drawdown": (
@@ -1397,8 +1733,9 @@ def build_h1_decision(
         ),
         "limitations": [
             "Hold-out gaps are approximate online train–hold-out gaps.",
-            "Replay evidence is left-truncated at iteration 61.",
+            "Final-snapshot replay diversity evidence is left-truncated at iteration 61.",
             "Turnover is observable only from iteration 151.",
+            "Temporal alignment is descriptive and does not identify an exact change point.",
         ],
     }
 
@@ -1419,6 +1756,7 @@ def build_h1_summary(
         f"- Input audit: `{decision['input_status']}`",
         f"- Plateau reproduced: `{str(plateau['detected']).lower()}`",
         f"- Plateau start checkpoint: `{plateau['start_checkpoint']}`",
+        f"- Plateau confirmation checkpoint: `{plateau['confirmation_checkpoint']}`",
         f"- Available metric effects: `{available}/{len(effects)}`",
         "",
         "## Evidence stages",
@@ -1427,8 +1765,9 @@ def build_h1_summary(
     for name in (
         "fresh_state_supply",
         "replay_pressure",
+        "snapshot_diversity",
         "generalisation",
-        "temporal_order",
+        "temporal_alignment",
     ):
         stage = stages[name]
         lines.append(
@@ -1440,8 +1779,10 @@ def build_h1_summary(
             "## Interpretation limits",
             "",
             "- Generalisation evidence is an approximate online train–hold-out gap, not an exact paired loss gap.",
-            "- Replay evidence is left-truncated at iteration 61; turnover becomes observable at iteration 151.",
-            "- Metrics with fewer than four valid checkpoints are unavailable and are not force-classified.",
+            "- Final-snapshot replay diversity evidence is left-truncated at iteration 61; training-log replay proxies are available from iteration 1.",
+            "- Turnover becomes observable at iteration 151.",
+            "- Metrics with fewer than four valid source-grain points are unavailable and are not force-classified.",
+            "- Trend directions use descriptive OLS and endpoint agreement; no significance test or exact change point is claimed.",
         ]
     )
     if decision["analysis_mode"] == "descriptive_full_run":
@@ -1523,7 +1864,12 @@ def _build_gate_summary(
         "plateau": {
             "status": plateau_result.get("status"),
             "detected": plateau_result.get("plateau_detected") is True,
-            "start_checkpoint": plateau_result.get("plateau_iteration"),
+            "start_checkpoint": plateau_result.get(
+                "plateau_start_checkpoint", plateau_result.get("plateau_iteration")
+            ),
+            "confirmation_checkpoint": plateau_result.get(
+                "plateau_confirmation_checkpoint"
+            ),
         },
         "h1": {
             "status": decision.get("status"),
@@ -1540,8 +1886,9 @@ def _failed_stages(reason: str) -> dict[str, dict[str, Any]]:
         for name in (
             "fresh_state_supply",
             "replay_pressure",
+            "snapshot_diversity",
             "generalisation",
-            "temporal_order",
+            "temporal_alignment",
         )
     }
 
@@ -1696,24 +2043,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_aligned_table(aligned, checkpoint_grid)
         aligned = _annotate_strength(aligned)
         minimum_points = _required_int(
-            h1_config.get("trend_analysis", {}).get("minimum_valid_checkpoints"),
-            "minimum_valid_checkpoints",
+            h1_config.get("trend_analysis", {}).get("minimum_valid_points"),
+            "minimum_valid_points",
+        )
+        training_iteration_effect_rows = build_training_iteration_effect_rows(
+            raw_metrics, derived_metrics, plateau
+        )
+        replay_iteration_effect_rows = build_replay_iteration_effect_rows(
+            replay_metrics, plateau
+        )
+        checkpoint_effect_rows = build_checkpoint_effect_rows(
+            holdout_checkpoints, plateau
         )
         effects = build_effect_rows(
-            aligned, plateau, minimum_points=minimum_points
+            training_iteration_effect_rows,
+            replay_iteration_effect_rows,
+            checkpoint_effect_rows,
+            plateau,
+            minimum_points=minimum_points,
         )
         stages = {
             "fresh_state_supply": judge_fresh_state_supply(effects),
             "replay_pressure": judge_replay_pressure(effects),
+            "snapshot_diversity": judge_snapshot_diversity(effects),
             "generalisation": judge_generalisation(effects),
         }
-        stages["temporal_order"] = judge_temporal_order(effects, plateau)
+        stages["temporal_alignment"] = judge_temporal_alignment(effects, plateau)
         maximum_drawdown = find_maximum_drawdown(aligned)
         decision = build_h1_decision(
             input_status=upstream["status"],
             plateau_result=plateau,
             stages=stages,
             maximum_drawdown=maximum_drawdown,
+            analysis_id=str(h1_config.get("protocol_id", "h1_v1_1")),
         )
 
         _write_csv(output_paths["aligned_checkpoint_metrics"], aligned, ALIGNED_FIELDS)
