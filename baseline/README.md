@@ -42,6 +42,7 @@ baseline/
 |   |   |-- summarize_replay.py
 |   |   |-- evaluate_fixed_basket.py
 |   |   |-- summarize_fixed_basket.py
+|   |   |-- detect_plateau.py
 |   |   |-- generate_holdout.py
 |   |   |-- evaluate_holdout.py
 |   |   |-- verify_holdout.py
@@ -50,6 +51,7 @@ baseline/
 |   |   |-- test_derive_baseline_metrics.py
 |   |   |-- test_summarize_replay.py
 |   |   |-- test_fixed_basket.py
+|   |   |-- test_h1_evidence.py
 |   |   `-- test_holdout.py
 |   `-- README.md          Reproducible analysis operations manual
 |-- arena/                 Fixed opponents, adapters, Elo, and match utilities

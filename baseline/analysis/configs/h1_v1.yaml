@@ -241,6 +241,7 @@ outputs:
   merged_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/h1_v1/checkpoint_metrics.csv
   metric_trends: outputs/baseline_seed1001_4090_analysis/h1_v1/metric_trends.csv
   stage_results: outputs/baseline_seed1001_4090_analysis/h1_v1/stage_results.json
-  plateau_result: outputs/baseline_reproduction_seed1001_4090/gate2/plateau.json
+  plateau_windows: outputs/baseline_seed1001_4090_analysis/h1_v1/plateau_windows.csv
+  plateau_result: outputs/baseline_seed1001_4090_analysis/h1_v1/plateau.json
   summary: outputs/baseline_seed1001_4090_analysis/h1_v1/summary.json
   run_log: outputs/baseline_seed1001_4090_analysis/h1_v1/h1.log

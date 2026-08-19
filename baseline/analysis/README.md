@@ -18,8 +18,11 @@ The current workflow has four parts:
 2. **Final replay snapshot analysis.** Analyse the 150-iteration rolling window saved at iteration 210, including canonical-state diversity, duplicate rate, state-effective count, per-iteration game counts and length distributions, and game boundaries recovered from `step` resets.
 3. **Fixed-basket evaluation.** Evaluate selected checkpoints against the same four opponents under fixed seeds, side assignments, MCTS settings, temperature schedule, and 150-turn limit. Produce per-game records, checkpoint summaries, opponent-stratified summaries, and provisional Elo ratings.
 4. **Frozen policy/value hold-out.** Generate 200 independent checkpoint-0 MCTS self-play games once, preserve complete `(canonical_board, policy_target, value_target, valid_moves, step, game_length)` samples, verify their integrity, and evaluate every registered checkpoint without placing any hold-out state in replay.
+5. **H1 plateau detection.** Validate the complete formal fixed-basket, reconstruct equal-opponent macro scores, and apply the registered rolling paired-bootstrap plateau rule.
 
-The workflow does not make the plateau decision or publication figures automatically. The corresponding registered paths in `baseline_gate2.yaml` define provenance and intended downstream use; their presence does not mean that an analysis has been run.
+The workflow does not make publication figures automatically. The plateau result is
+created only by running `detect_plateau.py`; registered paths alone do not mean
+that the analysis has been run.
 
 ### Hold-out design correction
 
@@ -272,7 +275,28 @@ Formal acceptance requires:
 - 95% confidence intervals calculated by bootstrap stratified by opponent and model colour; and
 - Elo marked `provisional` with a fixed random seed. After Adaptive evaluation, Baseline checkpoints, Adaptive checkpoints, and fixed opponents must be fitted together in one final Elo model.
 
-## 5. Generate, freeze, verify, and evaluate the formal hold-out
+## 5. Detect the fixed-basket plateau
+
+After the formal fixed-basket summary is complete, run:
+
+```powershell
+python analysis/scripts/detect_plateau.py
+```
+
+The command validates the manifest and all 2,400 games before writing either
+formal result. It reconstructs the equal-weight four-opponent macro score, uses
+real checkpoint iterations for each four-point OLS window, and applies the
+paired bootstrap and consecutive-window rule from `baseline_gate2.yaml`.
+
+```text
+outputs/baseline_seed1001_4090_analysis/h1_v1/
+|-- plateau_windows.csv
+`-- plateau.json
+```
+
+Input validation failures return exit code 2 and do not write these outputs.
+
+## 6. Generate, freeze, verify, and evaluate the formal hold-out
 
 The fixed protocol is `analysis/configs/holdout_v1.yaml`. It uses seed 71001, 200 games, checkpoint 0 with its registered SHA-256, 200 MCTS simulations, inference batch 10, `cpuct` 1.25, root Dirichlet noise with alpha 0.15 and epsilon 0.25, and a 150-turn limit. Its `temperature_threshold: 15` follows `Coach.executeEpisode()` exactly: `temp = int(step < 15)`.
 

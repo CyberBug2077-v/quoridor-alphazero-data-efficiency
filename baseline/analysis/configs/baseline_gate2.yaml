@@ -157,7 +157,8 @@ outputs:
   holdout_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/holdout_v1/checkpoint_metrics.csv
   holdout_trajectory_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/holdout_v1/trajectory_checkpoint_metrics.csv
   holdout_summary: outputs/baseline_seed1001_4090_analysis/holdout_v1/summary.json
-  plateau_result: outputs/baseline_reproduction_seed1001_4090/gate2/plateau.json
+  plateau_windows: outputs/baseline_seed1001_4090_analysis/h1_v1/plateau_windows.csv
+  plateau_result: outputs/baseline_seed1001_4090_analysis/h1_v1/plateau.json
   plot_learning_curve_png: outputs/baseline_reproduction_seed1001_4090/gate2/plots/learning_curve.png
   plot_replay_dynamics_png: outputs/baseline_reproduction_seed1001_4090/gate2/plots/replay_dynamics.png
   summary: outputs/baseline_reproduction_seed1001_4090/gate2/summary.json

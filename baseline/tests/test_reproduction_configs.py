@@ -304,6 +304,12 @@ def test_baseline_gate2_analysis_protocol_is_frozen() -> None:
     assert config["outputs"]["trajectory_stats"] == (
         "outputs/baseline_seed1001_4090_analysis/replay/trajectory_stats.csv"
     )
+    assert config["outputs"]["plateau_windows"] == (
+        "outputs/baseline_seed1001_4090_analysis/h1_v1/plateau_windows.csv"
+    )
+    assert config["outputs"]["plateau_result"] == (
+        "outputs/baseline_seed1001_4090_analysis/h1_v1/plateau.json"
+    )
 
 
 def test_h1_analysis_protocol_is_frozen() -> None:
@@ -365,4 +371,10 @@ def test_h1_analysis_protocol_is_frozen() -> None:
     assert config["h1_classification"]["score_or_point_total"] == "none"
     assert config["outputs"]["root"] == (
         "outputs/baseline_seed1001_4090_analysis/h1_v1"
+    )
+    assert config["outputs"]["plateau_windows"] == (
+        "outputs/baseline_seed1001_4090_analysis/h1_v1/plateau_windows.csv"
+    )
+    assert config["outputs"]["plateau_result"] == (
+        "outputs/baseline_seed1001_4090_analysis/h1_v1/plateau.json"
     )
