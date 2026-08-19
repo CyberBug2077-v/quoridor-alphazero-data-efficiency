@@ -257,6 +257,42 @@ def test_cluster_bootstrap_is_seeded_and_resamples_complete_games() -> None:
     assert set(first) == {"policy_loss", "value_loss", "total_loss"}
 
 
+def test_checkpoint_metric_schema_and_approximate_gap_definition() -> None:
+    assert evaluate.CHECKPOINT_FIELDS == (
+        "checkpoint",
+        "gpu_hours",
+        "states",
+        "games",
+        "holdout_policy_loss",
+        "holdout_policy_loss_ci_low",
+        "holdout_policy_loss_ci_high",
+        "holdout_value_loss",
+        "holdout_value_loss_ci_low",
+        "holdout_value_loss_ci_high",
+        "holdout_total_loss",
+        "logged_train_policy_loss",
+        "logged_train_value_loss",
+        "approx_policy_gap",
+        "approx_value_gap",
+        "evaluation_seconds",
+        "checkpoint_sha256",
+        "dataset_content_sha256",
+    )
+    training = {
+        20: {
+            "policy_loss": 1.25,
+            "value_loss": 0.5,
+            "cumulative_gpu_hours": 2.0,
+        }
+    }
+    columns = evaluate._training_columns(
+        20, training, {"policy_loss": 1.75, "value_loss": 0.625}
+    )
+    assert columns["approx_policy_gap"] == pytest.approx(0.5)
+    assert columns["approx_value_gap"] == pytest.approx(0.125)
+    assert columns["gpu_hours"] == pytest.approx(2.0)
+
+
 def test_shard_round_trip_preserves_exact_array_schema(tmp_path: Path) -> None:
     arrays = generate.finalize_episode(
         _history(), game_id=7, terminal_result=1, game_length=2
@@ -317,7 +353,12 @@ def test_holdout_scripts_are_not_imported_by_training_entrypoints() -> None:
 
 
 def test_adaptive_config_freezes_the_formal_holdout_content_hash() -> None:
-    config_path = ANALYSIS.parents[1] / "extension" / "configs" / "adaptive_holdout_v1.yaml"
+    config_path = (
+        ANALYSIS.parents[1]
+        / "experiments"
+        / "configs"
+        / "adaptive_holdout_v1.yaml"
+    )
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     holdout = config["holdout"]
 

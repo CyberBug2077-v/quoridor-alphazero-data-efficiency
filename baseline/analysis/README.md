@@ -310,15 +310,22 @@ python analysis/scripts/verify_holdout.py `
   --dataset outputs/baseline_seed1001_4090_analysis/holdout_v1/states.npz
 ```
 
-The manifest records both the SHA-256 of the compressed NPZ file and a logical content SHA-256 over the ordered array name, dtype, shape, and contiguous bytes. After a formal manifest reaches `status: completed`, do not regenerate it, manually delete states, select samples based on loss, or add any hold-out sample to Baseline or Adaptive replay. Adaptive consumes the read-only dataset contract in `../extension/configs/adaptive_holdout_v1.yaml`.
+The manifest records both the SHA-256 of the compressed NPZ file and a logical content SHA-256 over the ordered array name, dtype, shape, and contiguous bytes. After a formal manifest reaches `status: completed`, do not regenerate it, manually delete states, select samples based on loss, or add any hold-out sample to Baseline or Adaptive replay. Adaptive consumes the read-only dataset contract in `../experiments/configs/adaptive_holdout_v1.yaml`.
 
 Run all registered baseline checkpoints:
 
 ```powershell
-python analysis/scripts/evaluate_holdout.py --device cuda
+python analysis/scripts/evaluate_holdout.py `
+  --config analysis/configs/holdout_v1.yaml `
+  --dataset outputs/baseline_seed1001_4090_analysis/holdout_v1/states.npz `
+  --run-dir outputs/baseline_reproduction_seed1001_4090 `
+  --output-dir outputs/baseline_seed1001_4090_analysis/holdout_v1 `
+  --verify-dataset-hash
 ```
 
-The evaluator resolves checkpoint 0 from `run_metadata.json` and checkpoints 20–210 from the existing manifest/directory discovery logic, then records every checkpoint SHA-256. It uses the exact training policy-loss definition: request logits, apply the saved valid-action mask, softmax, and compute cross entropy against the MCTS root target. Value loss is mean squared error. Confidence intervals resample complete game trajectories and aggregate their state-level losses. For checkpoints 20–210, gap columns are hold-out loss minus the same-iteration replay-sampled training loss; checkpoint 0 has no training loss and its gap cells are intentionally blank.
+The evaluator resolves checkpoint 0 from `run_metadata.json` and checkpoints 20–210 from the existing manifest/directory discovery logic, then records every checkpoint SHA-256. It uses the exact training policy-loss definition: request logits, apply the saved valid-action mask, softmax, and compute cross entropy against the MCTS root target. Value loss is mean squared error. Confidence intervals resample complete game trajectories and aggregate their state-level losses.
+
+Only the final `latest.examples` replay snapshot was retained; a complete replay snapshot for each checkpoint does not exist. Therefore `approx_policy_gap` and `approx_value_gap` subtract the same-iteration online loss logged during training and must be described in code, tables, figures, and dissertation prose as the **approximate online train–hold-out gap**. They are not posterior training losses recomputed on each checkpoint's full replay. Checkpoint 0 has no logged training loss, so its logged-loss and gap cells are intentionally blank.
 
 To evaluate Adaptive later, point `--run-dir` and `--training-metrics` at its run while retaining the same baseline `--holdout-dir`. Use a separate `--output-dir` so the Baseline metrics are not overwritten.
 
@@ -368,7 +375,7 @@ The repository does not currently assign final dissertation figure numbers. Duri
 | Baseline checkpoint learning curve | `fixed_basket_v1/checkpoint_summary.csv` | Fixed-basket score rate and stratified bootstrap confidence intervals |
 | Per-opponent comparison | `fixed_basket_v1/opponent_summary.csv` | Checkpoint-by-opponent performance and side balance |
 | Elo appendix or diagnostic figure | `fixed_basket_v1/elo_summary.csv` | Provisional baseline-only Elo; the final dissertation Elo must use the joint fit |
-| Policy/value generalisation curve | `holdout_v1/checkpoint_metrics.csv` | Frozen checkpoint-0 self-play hold-out losses, train–hold-out gaps, and game-cluster bootstrap intervals |
+| Policy/value generalisation curve | `holdout_v1/checkpoint_metrics.csv` | Frozen checkpoint-0 self-play hold-out losses, approximate online train–hold-out gaps, and game-cluster bootstrap intervals |
 | Hold-out trajectory sensitivity | `holdout_v1/trajectory_checkpoint_metrics.csv` | Checkpoint-by-game loss distributions without treating within-game states as independent trajectories |
 | Hold-out provenance and integrity | `holdout_v1/protocol.resolved.yaml`, `holdout_v1/manifest.json`, `holdout_v1/summary.json` | Dataset source hash, exact self-play protocol, state schema, checkpoint hashes, and evaluation definitions |
 | Methods and reproducibility appendix | `evaluation_manifest.json`, `protocol.resolved.yaml` | Seeds, checkpoint provenance, protocol, source-integrity status, and data-quality notes |

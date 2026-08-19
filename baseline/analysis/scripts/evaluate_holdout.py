@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -35,26 +35,23 @@ from verify_holdout import verify_holdout
 
 CHECKPOINT_FIELDS = (
     "checkpoint",
-    "checkpoint_path",
-    "checkpoint_sha256",
-    "games",
+    "gpu_hours",
     "states",
-    "policy_loss",
-    "policy_loss_ci_lower",
-    "policy_loss_ci_upper",
-    "value_loss",
-    "value_loss_ci_lower",
-    "value_loss_ci_upper",
-    "total_loss",
-    "total_loss_ci_lower",
-    "total_loss_ci_upper",
-    "train_policy_loss",
-    "policy_train_holdout_gap",
-    "train_value_loss",
-    "value_train_holdout_gap",
-    "train_total_loss",
-    "total_train_holdout_gap",
-    "cumulative_gpu_hours",
+    "games",
+    "holdout_policy_loss",
+    "holdout_policy_loss_ci_low",
+    "holdout_policy_loss_ci_high",
+    "holdout_value_loss",
+    "holdout_value_loss_ci_low",
+    "holdout_value_loss_ci_high",
+    "holdout_total_loss",
+    "logged_train_policy_loss",
+    "logged_train_value_loss",
+    "approx_policy_gap",
+    "approx_value_gap",
+    "evaluation_seconds",
+    "checkpoint_sha256",
+    "dataset_content_sha256",
 )
 
 TRAJECTORY_FIELDS = (
@@ -194,30 +191,29 @@ def _training_columns(
 ) -> dict[str, Any]:
     if checkpoint == 0:
         return {
-            "train_policy_loss": None,
-            "policy_train_holdout_gap": None,
-            "train_value_loss": None,
-            "value_train_holdout_gap": None,
-            "train_total_loss": None,
-            "total_train_holdout_gap": None,
-            "cumulative_gpu_hours": 0.0,
+            "logged_train_policy_loss": None,
+            "logged_train_value_loss": None,
+            "approx_policy_gap": None,
+            "approx_value_gap": None,
+            "gpu_hours": 0.0,
         }
     row = training.get(checkpoint)
     if row is None:
         raise HoldoutError(f"training metrics lack checkpoint iteration {checkpoint}")
     output: dict[str, Any] = {}
-    for metric in ("policy_loss", "value_loss", "total_loss"):
-        train_key = f"train_{metric}"
-        gap_key = f"{metric.removesuffix('_loss')}_train_holdout_gap"
+    for metric, logged_key, gap_key in (
+        ("policy_loss", "logged_train_policy_loss", "approx_policy_gap"),
+        ("value_loss", "logged_train_value_loss", "approx_value_gap"),
+    ):
         train_value = row.get(metric)
         if not isinstance(train_value, (int, float)) or not np.isfinite(train_value):
             raise HoldoutError(f"training {metric} is invalid at iteration {checkpoint}")
-        output[train_key] = float(train_value)
+        output[logged_key] = float(train_value)
         output[gap_key] = float(holdout[metric] - train_value)
     gpu_hours = row.get("cumulative_gpu_hours")
     if not isinstance(gpu_hours, (int, float)) or not np.isfinite(gpu_hours):
         raise HoldoutError(f"cumulative_gpu_hours is invalid at iteration {checkpoint}")
-    output["cumulative_gpu_hours"] = float(gpu_hours)
+    output["gpu_hours"] = float(gpu_hours)
     return output
 
 
@@ -238,8 +234,12 @@ def evaluate(args: argparse.Namespace) -> None:
     protocol = load_protocol(args.config)
     output_dir = args.output_dir.expanduser().resolve()
     run_dir = args.run_dir.expanduser().resolve()
-    verification = verify_holdout(args.config, args.holdout_dir)
-    states_path = args.holdout_dir.expanduser().resolve() / "states.npz"
+    states_path = args.dataset.expanduser().resolve()
+    verification = verify_holdout(
+        args.config, states_path.parent, dataset_path=states_path
+    )
+    if args.verify_dataset_hash and verification.get("status") != "passed":
+        raise HoldoutError("dataset hash verification did not pass")
     arrays = load_npz(states_path)
     checkpoints = _selected_checkpoints(
         args.checkpoints, list(protocol["evaluation"]["checkpoints"])
@@ -262,13 +262,20 @@ def evaluate(args: argparse.Namespace) -> None:
         raise HoldoutError(
             "baseline checkpoint 0 differs from the checkpoint used to generate hold-out"
         )
-    training = _read_training_metrics(args.training_metrics.expanduser().resolve())
+    training_metrics = (
+        args.training_metrics.expanduser().resolve()
+        if args.training_metrics is not None
+        else run_dir / "metrics.jsonl"
+    )
+    training = _read_training_metrics(training_metrics)
+    dataset_content_sha256 = verification["dataset_content_sha256"]
 
     all_trajectory_rows: list[dict[str, Any]] = []
     checkpoint_rows: list[dict[str, Any]] = []
     for entry in discovered:
         checkpoint = int(entry["iteration"])
         print(f"Evaluating checkpoint {checkpoint}...", flush=True)
+        evaluation_started = time.perf_counter()
         _, network = build_network(
             protocol, Path(entry["path"]), device=args.device
         )
@@ -302,20 +309,28 @@ def evaluate(args: argparse.Namespace) -> None:
         }
         row = {
             "checkpoint": checkpoint,
-            "checkpoint_path": entry["path"],
-            "checkpoint_sha256": entry["sha256"],
-            "games": int(protocol["games"]),
             "states": int(arrays["boards"].shape[0]),
-            **means,
-            "policy_loss_ci_lower": intervals["policy_loss"][0],
-            "policy_loss_ci_upper": intervals["policy_loss"][1],
-            "value_loss_ci_lower": intervals["value_loss"][0],
-            "value_loss_ci_upper": intervals["value_loss"][1],
-            "total_loss_ci_lower": intervals["total_loss"][0],
-            "total_loss_ci_upper": intervals["total_loss"][1],
+            "games": int(verification["games"]),
+            "holdout_policy_loss": means["policy_loss"],
+            "holdout_policy_loss_ci_low": intervals["policy_loss"][0],
+            "holdout_policy_loss_ci_high": intervals["policy_loss"][1],
+            "holdout_value_loss": means["value_loss"],
+            "holdout_value_loss_ci_low": intervals["value_loss"][0],
+            "holdout_value_loss_ci_high": intervals["value_loss"][1],
+            "holdout_total_loss": means["total_loss"],
+            "checkpoint_sha256": entry["sha256"],
+            "dataset_content_sha256": dataset_content_sha256,
         }
         row.update(_training_columns(checkpoint, training, means))
+        row["evaluation_seconds"] = time.perf_counter() - evaluation_started
         checkpoint_rows.append(row)
+        print(
+            f"Checkpoint {checkpoint} completed: "
+            f"policy_loss={row['holdout_policy_loss']:.6f}, "
+            f"value_loss={row['holdout_value_loss']:.6f}, "
+            f"seconds={row['evaluation_seconds']:.3f}.",
+            flush=True,
+        )
         del network
         if args.device == "cuda":
             torch.cuda.empty_cache()
@@ -341,6 +356,9 @@ def evaluate(args: argparse.Namespace) -> None:
         "dataset": {
             "path": states_path.as_posix(),
             "sha256": sha256_file(states_path),
+            "content_sha256": dataset_content_sha256,
+            "hash_verification_requested": bool(args.verify_dataset_hash),
+            "hash_verification_status": "passed",
             "verification": verification,
         },
         "loss_definition": {
@@ -350,7 +368,15 @@ def evaluate(args: argparse.Namespace) -> None:
             ),
             "value_loss": "mean state-level squared error",
             "total_loss": "policy_loss + value_loss",
-            "gap": "holdout loss minus same-iteration replay-sampled training loss",
+            "gap_name": "approximate online train–hold-out gap",
+            "gap_formula": (
+                "holdout loss minus the same-iteration logged online training loss"
+            ),
+            "gap_limitation": (
+                "Only final latest.examples was retained. Per-checkpoint replay snapshots "
+                "are unavailable, so these gaps are not posterior losses recomputed on each "
+                "checkpoint's complete training replay."
+            ),
         },
         "confidence_interval": {
             "method": "cluster bootstrap over complete game trajectories",
@@ -374,14 +400,16 @@ def evaluate(args: argparse.Namespace) -> None:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--holdout-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--dataset", type=Path, default=DEFAULT_OUTPUT_DIR / "states.npz"
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--run-dir", type=Path, default=DEFAULT_BASELINE_RUN_DIR)
     parser.add_argument(
         "--training-metrics",
         type=Path,
-        default=DEFAULT_BASELINE_RUN_DIR / "metrics.jsonl",
     )
+    parser.add_argument("--verify-dataset-hash", action="store_true")
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     parser.add_argument("--checkpoints", type=int, nargs="+")
     return parser.parse_args(argv)
