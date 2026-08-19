@@ -43,6 +43,7 @@ baseline/
 |   |   |-- evaluate_fixed_basket.py
 |   |   |-- summarize_fixed_basket.py
 |   |   |-- detect_plateau.py
+|   |   |-- merge_h1_evidence.py
 |   |   |-- generate_holdout.py
 |   |   |-- evaluate_holdout.py
 |   |   |-- verify_holdout.py

@@ -379,6 +379,26 @@ Each NPZ stores `boards [N,4,17,17] uint8`, `policies [N,action_size] float32`, 
 
 Generation is accepted only when `manifest.json.status == "completed"`, `games.jsonl` contains exactly 200 unique game IDs and deterministic seeds, all 200 shard hashes match, and `states.npz` is the exact ordered concatenation. Verification must exit zero and print `Output status: passed`. It also requires finite normalised policies supported only on legal moves, value labels in `{-1,0,1}` with the correct acting-player sign, sequential steps, consistent game lengths, and exact dtypes and shapes. Evaluation is accepted when `summary.json.status == "completed"`, all 12 checkpoints have finite losses and trajectory-bootstrap intervals, `checkpoint_metrics.csv` has 12 rows, and `trajectory_checkpoint_metrics.csv` has one row for each checkpoint-game pair.
 
+## 7. Merge and judge the H1 evidence
+
+After the plateau, replay, and hold-out packages are complete, run:
+
+```powershell
+python analysis/scripts/merge_h1_evidence.py
+```
+
+The script audits every registered upstream status and file, freezes the resolved
+protocol and input manifest, aggregates iteration data into the 12 checkpoint
+blocks, and preserves missing and left-truncated observations as null. Ratio
+metrics use a ratio of sums; checkpoint 210 is the complete 201–210 short block.
+It then writes `aligned_checkpoint_metrics.csv`, `h1_effects.csv`,
+`h1_decision.json`, and `h1_summary.md` under `h1_v1/`, and updates
+`gate2/summary.json` with the plateau/H1 statuses and product hashes.
+
+An effect needs at least four valid checkpoints. When the plateau is not
+reproduced, the full-run effects are labelled descriptive only and H1 is
+`not_assessable`.
+
 ## Tests
 
 After changing analysis code, run:
@@ -406,6 +426,8 @@ The repository does not currently assign final dissertation figure numbers. Duri
 | Policy/value generalisation curve | `holdout_v1/checkpoint_metrics.csv` | Frozen checkpoint-0 self-play hold-out losses, approximate online train–hold-out gaps, and game-cluster bootstrap intervals |
 | Hold-out trajectory sensitivity | `holdout_v1/trajectory_checkpoint_metrics.csv` | Checkpoint-by-game loss distributions without treating within-game states as independent trajectories |
 | Hold-out provenance and integrity | `holdout_v1/protocol.resolved.yaml`, `holdout_v1/manifest.json`, `holdout_v1/summary.json` | Dataset source hash, exact self-play protocol, state schema, checkpoint hashes, and evaluation definitions |
+| Aligned H1 evidence and Figure 5.1 annotations | `h1_v1/aligned_checkpoint_metrics.csv`, `h1_v1/h1_effects.csv` | Twelve-checkpoint merge, observability, best/final points, running best, and drawdown markers |
+| H1 decision | `h1_v1/h1_decision.json`, `h1_v1/h1_summary.md` | Supply, replay, approximate train–hold-out gap, temporal-order stages, and the final H1 status |
 | Methods and reproducibility appendix | `evaluation_manifest.json`, `protocol.resolved.yaml` | Seeds, checkpoint provenance, protocol, source-integrity status, and data-quality notes |
 | Per-game audit | `fixed_basket_v1/games.jsonl` | Trace abnormal termination, turn-limit games, colours, and game seeds; not a main result table |
 

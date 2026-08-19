@@ -351,8 +351,12 @@ def test_h1_analysis_protocol_is_frozen() -> None:
         "turnover_fraction": "decrease",
         "incoming_unique_state_ratio": "decrease",
         "duplicate_rate": "increase",
+        "state_effective_ratio": "decrease",
+        "buffer_inflow_fraction": "decrease",
+        "states_per_gpu_hour": "not_increase",
         "approx_policy_gap": "increase",
         "approx_value_gap": "increase",
+        "approx_total_gap": "increase",
         "fixed_basket_macro_score": "later_plateau",
     }
     assert {

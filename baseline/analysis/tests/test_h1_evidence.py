@@ -23,6 +23,7 @@ def load_script(name: str):
 
 
 detect = load_script("detect_plateau")
+merge = load_script("merge_h1_evidence")
 
 CHECKPOINTS = [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 210]
 OPPONENTS = ["heuristic_20", "heuristic_200", "greedy_random_50", "random"]
@@ -369,3 +370,252 @@ def test_invalid_input_returns_2_without_formal_outputs(
     assert "Input validation failed" in capsys.readouterr().err
     assert not (output_dir / "plateau_windows.csv").exists()
     assert not (output_dir / "plateau.json").exists()
+
+
+def test_ratio_of_sums_is_not_mean_of_iteration_ratios() -> None:
+    rows = [
+        {"positions_generated": 10, "optimizer_steps": 2},
+        {"positions_generated": 10, "optimizer_steps": 8},
+    ]
+    assert merge.aggregate_ratio_of_sums(
+        rows, "positions_generated", "optimizer_steps"
+    ) == pytest.approx(2.0)
+    assert sum(
+        row["positions_generated"] / row["optimizer_steps"] for row in rows
+    ) / len(rows) == pytest.approx(3.125)
+
+
+def test_checkpoint_block_boundaries_are_previous_plus_one_through_checkpoint() -> None:
+    blocks = merge.build_checkpoint_blocks(CHECKPOINTS)
+    assert blocks[0] == {
+        "checkpoint": 0,
+        "block_start_iteration": None,
+        "block_end_iteration": None,
+        "block_iterations": 0,
+        "is_short_block": False,
+    }
+    assert blocks[1]["block_start_iteration"] == 1
+    assert blocks[1]["block_end_iteration"] == 20
+    assert blocks[10]["block_start_iteration"] == 181
+    assert blocks[10]["block_end_iteration"] == 200
+
+
+def test_checkpoint_210_is_a_ten_iteration_block() -> None:
+    final = merge.build_checkpoint_blocks(CHECKPOINTS)[-1]
+    assert final["block_start_iteration"] == 201
+    assert final["block_end_iteration"] == 210
+    assert final["block_iterations"] == 10
+    assert final["is_short_block"] is True
+
+
+def test_checkpoint_zero_gaps_are_missing_not_zero() -> None:
+    [row] = merge.apply_observability_rules(
+        [
+            {
+                "checkpoint": 0,
+                "approx_policy_gap": 0.0,
+                "approx_value_gap": 0.0,
+                "approx_total_gap": 0.0,
+            }
+        ]
+    )
+    assert row["approx_policy_gap"] is None
+    assert row["approx_value_gap"] is None
+    assert row["approx_total_gap"] is None
+
+
+def test_replay_metrics_are_left_truncated_before_iteration_61() -> None:
+    rows = merge.apply_observability_rules(
+        [
+            {
+                "checkpoint": checkpoint,
+                "mean_sample_exposure": 1.0,
+                "mean_sample_age": 2.0,
+                "p90_sample_age": 3.0,
+                "incoming_unique_state_ratio": 0.5,
+                "duplicate_rate": 0.5,
+                "state_effective_ratio": 0.5,
+            }
+            for checkpoint in (60, 80)
+        ]
+    )
+    assert rows[0]["mean_sample_exposure"] is None
+    assert rows[0]["duplicate_rate"] is None
+    assert rows[0]["replay_observable"] is False
+    assert rows[1]["mean_sample_exposure"] == pytest.approx(1.0)
+
+
+def test_turnover_is_unobservable_until_iteration_151() -> None:
+    rows = merge.apply_observability_rules(
+        [
+            {"checkpoint": 140, "turnover_fraction": 0.2},
+            {"checkpoint": 160, "turnover_fraction": 0.3},
+        ]
+    )
+    assert rows[0]["turnover_fraction"] is None
+    assert rows[0]["turnover_observable"] is False
+    assert rows[1]["turnover_fraction"] == pytest.approx(0.3)
+
+
+def _synthetic_merge_sources() -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    baseline = []
+    replay = []
+    holdout = []
+    fixed = []
+    for block in merge.build_checkpoint_blocks(CHECKPOINTS):
+        checkpoint = block["checkpoint"]
+        baseline.append({**block, "fresh_states_per_update": 1.0})
+        replay.append(
+            {
+                "checkpoint": checkpoint,
+                "incoming_unique_state_ratio": 0.8,
+                "duplicate_rate": 0.2,
+                "state_effective_ratio": 0.8,
+                "replay_observable": checkpoint >= 80,
+            }
+        )
+        holdout.append(
+            {
+                "checkpoint": checkpoint,
+                "holdout_policy_loss": 1.0,
+                "holdout_value_loss": 1.0,
+                "holdout_total_loss": 2.0,
+                "logged_train_policy_loss": 0.9,
+                "logged_train_value_loss": 0.9,
+                "approx_policy_gap": 0.1,
+                "approx_value_gap": 0.1,
+            }
+        )
+        fixed.append(
+            {
+                "checkpoint": checkpoint,
+                "score_rate": 0.5,
+                "score_rate_ci95_low": 0.45,
+                "score_rate_ci95_high": 0.55,
+                **{field: 0.5 for field in merge.FIXED_OPPONENT_SCORE_COLUMNS},
+            }
+        )
+    return baseline, replay, holdout, fixed
+
+
+def test_multi_source_join_has_exactly_twelve_checkpoint_rows() -> None:
+    baseline, replay, holdout, fixed = _synthetic_merge_sources()
+    rows = merge.merge_checkpoint_sources(
+        baseline,
+        replay,
+        holdout,
+        fixed,
+        {"plateau_detected": True, "plateau_iteration": 100},
+    )
+    merge.validate_aligned_table(rows, CHECKPOINTS)
+    assert len(rows) == 12
+    assert [row["checkpoint"] for row in rows] == CHECKPOINTS
+    assert rows[0]["approx_policy_gap"] is None
+
+
+def test_best_observed_tie_selects_earliest_checkpoint() -> None:
+    rows = [
+        {"checkpoint": 0, "fixed_basket_macro_score": 0.7},
+        {"checkpoint": 20, "fixed_basket_macro_score": 0.9},
+        {"checkpoint": 40, "fixed_basket_macro_score": 0.9},
+    ]
+    assert merge.find_best_observed_checkpoint(rows) == 20
+
+
+def test_maximum_drawdown_marks_its_peak_and_trough() -> None:
+    rows = [
+        {"checkpoint": checkpoint, "fixed_basket_macro_score": score}
+        for checkpoint, score in (
+            (0, 0.8),
+            (20, 0.9),
+            (40, 0.7),
+            (60, 0.95),
+            (80, 0.65),
+        )
+    ]
+    rows = merge.calculate_drawdowns(merge.calculate_running_best(rows))
+    result = merge.find_maximum_drawdown(rows)
+    assert result is not None
+    assert result["maximum_drawdown"] == pytest.approx(0.30)
+    assert result["peak_checkpoint"] == 60
+    assert result["trough_checkpoint"] == 80
+
+
+@pytest.mark.parametrize(
+    ("input_status", "plateau", "supply", "replay", "gap", "temporal", "expected"),
+    [
+        (
+            "passed",
+            True,
+            "consistent",
+            "consistent",
+            "consistent",
+            "consistent",
+            "supported_with_limitations",
+        ),
+        (
+            "passed",
+            True,
+            "consistent",
+            "mixed",
+            "unavailable",
+            "consistent",
+            "partially_supported",
+        ),
+        (
+            "passed",
+            True,
+            "inconsistent",
+            "consistent",
+            "consistent",
+            "consistent",
+            "not_supported",
+        ),
+        (
+            "passed",
+            False,
+            "consistent",
+            "consistent",
+            "consistent",
+            "consistent",
+            "not_assessable",
+        ),
+    ],
+)
+def test_four_h1_outcomes(
+    input_status: str,
+    plateau: bool,
+    supply: str,
+    replay: str,
+    gap: str,
+    temporal: str,
+    expected: str,
+) -> None:
+    assert merge.judge_h1(
+        input_status=input_status,
+        plateau_detected=plateau,
+        supply=supply,
+        replay=replay,
+        generalisation=gap,
+        temporal_order=temporal,
+    ) == expected
+
+
+def test_no_plateau_uses_full_run_in_descriptive_only_mode() -> None:
+    rows = [
+        {
+            "checkpoint": checkpoint,
+            "fresh_states_per_update": value,
+            "training_gpu_hours": float(checkpoint),
+        }
+        for checkpoint, value in ((20, 4.0), (40, 3.0), (60, 2.0), (80, 1.0))
+    ]
+    selected = merge.select_pre_plateau_range(
+        rows,
+        "fresh_states_per_update",
+        {"plateau_detected": False, "plateau_iteration": None},
+    )
+    assert selected["analysis_mode"] == "descriptive_full_run"
+    assert selected["availability_status"] == "available"
+    assert len(selected["rows"]) == 4
+    assert "descriptive only" in selected["limitation"]
