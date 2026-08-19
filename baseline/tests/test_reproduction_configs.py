@@ -247,14 +247,8 @@ def test_baseline_gate2_analysis_protocol_is_frozen() -> None:
         "SHA256(dtype + shape + contiguous canonical-board bytes)"
     )
 
-    basket = config["fixed_basket"]
-    assert basket["games_per_opponent"] == 40
-    assert [opponent["id"] for opponent in basket["opponents"]] == [
-        "random",
-        "greedy",
-        "random_greedy",
-    ]
-    assert all(opponent["games"] == 40 for opponent in basket["opponents"])
+    # The fixed-basket protocol is authoritative only in fixed_basket_v1.yaml.
+    assert "fixed_basket" not in config
 
     assert config["holdout"]["seed"] == 71001
     assert config["holdout"]["games"] == 200
@@ -271,6 +265,27 @@ def test_baseline_gate2_analysis_protocol_is_frozen() -> None:
     assert config["outputs"]["data_quality_report"].endswith(
         "/data_quality_report.json"
     )
+    fixed_basket_root = (
+        "outputs/baseline_seed1001_4090_analysis/fixed_basket_v1"
+    )
+    assert {
+        key: value
+        for key, value in config["outputs"].items()
+        if key.startswith("fixed_basket_")
+    } == {
+        "fixed_basket_root": fixed_basket_root,
+        "fixed_basket_protocol": f"{fixed_basket_root}/protocol.resolved.yaml",
+        "fixed_basket_manifest": f"{fixed_basket_root}/evaluation_manifest.json",
+        "fixed_basket_games": f"{fixed_basket_root}/games.jsonl",
+        "fixed_basket_checkpoint_summary": (
+            f"{fixed_basket_root}/checkpoint_summary.csv"
+        ),
+        "fixed_basket_opponent_summary": (
+            f"{fixed_basket_root}/opponent_summary.csv"
+        ),
+        "fixed_basket_elo_summary": f"{fixed_basket_root}/elo_summary.csv",
+        "fixed_basket_evaluation_log": f"{fixed_basket_root}/evaluation.log",
+    }
     assert config["baseline_metrics"]["buffer_fraction_consumed"] == (
         "examples_used / replay_buffer_size"
     )
@@ -288,4 +303,66 @@ def test_baseline_gate2_analysis_protocol_is_frozen() -> None:
     )
     assert config["outputs"]["trajectory_stats"] == (
         "outputs/baseline_seed1001_4090_analysis/replay/trajectory_stats.csv"
+    )
+
+
+def test_h1_analysis_protocol_is_frozen() -> None:
+    path = BASELINE_ROOT / "analysis" / "configs" / "h1_v1.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(config, dict)
+
+    assert config["protocol_id"] == "h1_v1"
+    assert config["checkpoint_grid"]["iterations"] == [
+        0,
+        20,
+        40,
+        60,
+        80,
+        100,
+        120,
+        140,
+        160,
+        180,
+        200,
+        210,
+    ]
+    assert config["interval_aggregation"]["interval"] == (
+        "previous_checkpoint < iteration <= checkpoint"
+    )
+    assert config["trend_analysis"]["minimum_valid_checkpoints"] == 4
+    assert config["plateau_source"] == {
+        "config": "analysis/configs/baseline_gate2.yaml",
+        "section": "plateau",
+        "metric": "fixed_basket_macro_score",
+        "copy_thresholds_into_h1_config": False,
+    }
+
+    expected_directions = {
+        "fresh_states_per_update": "decrease",
+        "mean_sample_exposure": "increase",
+        "mean_sample_age": "increase",
+        "p90_sample_age": "increase",
+        "turnover_fraction": "decrease",
+        "incoming_unique_state_ratio": "decrease",
+        "duplicate_rate": "increase",
+        "approx_policy_gap": "increase",
+        "approx_value_gap": "increase",
+        "fixed_basket_macro_score": "later_plateau",
+    }
+    assert {
+        metric: definition["expected_direction"]
+        for metric, definition in config["metrics"].items()
+    } == expected_directions
+    assert config["metrics"]["turnover_fraction"][
+        "eligible_iteration_start"
+    ] == 151
+    assert config["metrics"]["incoming_unique_state_ratio"][
+        "exclude_rows_where"
+    ] == {"incoming_ratio_left_censored": True}
+    assert config["missing_values"][
+        "fewer_than_four_valid_trend_points"
+    ] == "unavailable"
+    assert config["h1_classification"]["score_or_point_total"] == "none"
+    assert config["outputs"]["root"] == (
+        "outputs/baseline_seed1001_4090_analysis/h1_v1"
     )

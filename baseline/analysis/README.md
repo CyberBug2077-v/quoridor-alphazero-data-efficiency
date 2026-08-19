@@ -34,8 +34,12 @@ The formal hold-out therefore uses both sides of the shared checkpoint 0 under t
 | `analysis/configs/baseline_gate2.yaml` | Baseline run ID, replay and state-hash definitions, derived-metric definitions, input provenance, and registered analysis output paths |
 | `analysis/configs/fixed_basket_v1.yaml` | The authoritative fixed-basket protocol: checkpoints, opponents, game counts, side schedule, MCTS settings, temperature schedule, and seed |
 | `analysis/configs/holdout_v1.yaml` | The authoritative frozen hold-out protocol: checkpoint-0 source hash, model, self-play, storage, evaluation checkpoints, and trajectory-bootstrap settings |
+| `analysis/configs/h1_v1.yaml` | The authoritative H1 merge grid, interval aggregation, trend directions, evidence-stage classification, missing-data handling, and output paths |
 
-The fixed-basket scripts do not read the `fixed_basket` section in `baseline_gate2.yaml`. If the two files disagree about fixed-basket settings, `fixed_basket_v1.yaml` is authoritative.
+There is deliberately no fixed-basket protocol section in `baseline_gate2.yaml`.
+Fixed-basket protocol settings are read only from `fixed_basket_v1.yaml`; the
+`plateau` section in `baseline_gate2.yaml` remains authoritative for the plateau
+decision.
 
 The state hash is fixed as:
 

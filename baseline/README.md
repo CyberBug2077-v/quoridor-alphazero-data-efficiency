@@ -34,6 +34,7 @@ baseline/
 |   |-- configs/
 |   |   |-- baseline_gate2.yaml
 |   |   |-- fixed_basket_v1.yaml
+|   |   |-- h1_v1.yaml
 |   |   `-- holdout_v1.yaml
 |   |-- js/                Seeded bridge for the JavaScript MCTS opponent
 |   |-- scripts/

@@ -93,35 +93,6 @@ baseline_metrics:
     p90: weighted_empirical_quantile_0.90
     quantile_method: smallest_age_with_cumulative_weight_at_least_q_times_buffer_size
 
-fixed_basket:
-  paired_across_checkpoints: true
-  alternate_starting_player: true
-  games_per_opponent: 40
-  games_per_side: 20
-  max_game_length: 150
-  model:
-    mcts_simulations: 200
-    eval_mcts_in_batch: 4
-    cpuct: 1.25
-    temperature: 0
-    dirichlet_noise: false
-  opponents:
-    - id: random
-      implementation: arena.bot_random.RandomBot
-      games: 40
-      seed: 41001
-    - id: greedy
-      implementation: arena.bot_greedy.GreedyBot
-      games: 40
-      seed: 51001
-    - id: random_greedy
-      implementation: arena.bot_random_greedy.RandomGreedyBot
-      greedy_probability: 0.5
-      games: 40
-      seed: 61001
-  score_formula: "score = (wins + 0.5 * draws) / games"
-  aggregate_formula: "macro_score = mean(opponent score), with equal opponent weight"
-
 holdout:
   protocol_config: analysis/configs/holdout_v1.yaml
   source: checkpoint_0_alphazero_mcts_self_play_generated_once_after_training
@@ -168,9 +139,14 @@ outputs:
   replay_summary: outputs/baseline_seed1001_4090_analysis/replay/replay_final_summary.json
   trajectory_stats: outputs/baseline_seed1001_4090_analysis/replay/trajectory_stats.csv
   state_hash_manifest: outputs/baseline_reproduction_seed1001_4090/gate2/replay/state_hash_manifest.json
-  fixed_basket_games: outputs/baseline_reproduction_seed1001_4090/gate2/fixed_basket/games.jsonl
-  fixed_basket_checkpoint_metrics: outputs/baseline_reproduction_seed1001_4090/gate2/fixed_basket/checkpoint_metrics.csv
-  fixed_basket_summary: outputs/baseline_reproduction_seed1001_4090/gate2/fixed_basket/summary.json
+  fixed_basket_root: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1
+  fixed_basket_protocol: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/protocol.resolved.yaml
+  fixed_basket_manifest: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/evaluation_manifest.json
+  fixed_basket_games: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+  fixed_basket_checkpoint_summary: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
+  fixed_basket_opponent_summary: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/opponent_summary.csv
+  fixed_basket_elo_summary: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/elo_summary.csv
+  fixed_basket_evaluation_log: outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/evaluation.log
   holdout_root: outputs/baseline_seed1001_4090_analysis/holdout_v1
   holdout_protocol: outputs/baseline_seed1001_4090_analysis/holdout_v1/protocol.resolved.yaml
   holdout_manifest: outputs/baseline_seed1001_4090_analysis/holdout_v1/manifest.json
