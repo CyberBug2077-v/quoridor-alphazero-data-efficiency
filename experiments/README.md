@@ -1,10 +1,10 @@
-# Data-Efficient Quoridor AlphaZero Extension
+# Data-Efficient Quoridor AlphaZero Experiments
 
 This directory contains the new research code for the MSc dissertation on
 data-efficient post-pretraining self-play for 9x9 Quoridor AlphaZero under
 compute constraints.
 
-The extension builds on the adapted and validated system in `../baseline/`.
+The experiments build on the adapted and validated system in `../baseline/`.
 It does not copy or silently replace the inherited AlphaZero, Quoridor, Arena,
 or heuristic-bot implementations. Instead, it consumes a frozen baseline code
 commit, pretrained checkpoint, configuration, and artifact hashes.
@@ -30,24 +30,47 @@ New work developed here includes:
 | Arena and fixed opponents | `../baseline/arena/` | Inherited/adapted baseline |
 | Heuristic JS MCTS opponent | `../baseline/external/js-mcts/` | Inherited dependency |
 | Baseline smoke, pretraining, and reproduction | `../baseline/configs/`, `../baseline/scripts/` | Reproduction infrastructure |
-| Replay instrumentation and adaptive scheduling | `extension/` | New dissertation work |
-| Matched-compute experiments and analysis | `extension/` | New dissertation work |
+| Replay instrumentation and adaptive scheduling | `experiments/` | New dissertation work |
+| Matched-compute experiments and analysis | `experiments/` | New dissertation work |
 
-The baseline is not permanently read-only during the reproduction phase. It
-may receive minimal portability, testing, and reproducibility changes. It is
-frozen only after the baseline acceptance tests and pretrained checkpoint have
-been completed. Subsequent research changes belong here.
+The baseline reproduction and H1 analysis are frozen. Subsequent Adaptive
+implementation, experiment, and analysis changes belong in `experiments/`.
 
 ## Planned layout
 
 ```text
-extension/
+experiments/
 |-- configs/              Instrumented and adaptive experiment configurations
 |-- outputs/              Generated experiment artifacts
 |-- quoridor_project/     New instrumentation and adaptive implementation
-|-- scripts/              Extension experiment launchers
+|-- scripts/              Adaptive experiment launchers
 `-- tests/                Unit, integration, and regression tests for new work
 ```
+
+## Frozen protocol lifecycle
+
+The protocol configurations live in `configs/`. A run writes a complete
+`resolved_config.yaml` before work begins and records the source configuration
+SHA-256, checkpoint SHA-256 values, dataset SHA-256 values, and other important
+input hashes in `input_manifest.json`. A configuration never writes its own
+hash back into its YAML file, and result values belong only in JSON, JSONL, or
+CSV outputs.
+
+Once a `config_id` has started a run it is immutable. A frozen-parameter change
+requires a new version such as `*_v2.yaml`; an existing v1 file must not be
+overwritten or reused for a different run.
+
+The activation order is:
+
+1. `matched_compute_v1.yaml` defines the Baseline--Adaptive fairness contract.
+2. `adaptive_pilot_v1.yaml` validates the scheduler and resume behaviour.
+3. `adaptive_formal_v1.yaml` may change from `awaiting_pilot_gate` to `frozen`
+   only after the Pilot gate passes and its summary hash and experiment commit
+   are recorded.
+4. `adaptive_holdout_v1.yaml` and `adaptive_fixed_basket_v1.yaml` are frozen
+   before the formal run.
+5. `h2_v1.yaml`, `h3_v1.yaml`, and `head_to_head_v1.yaml` are frozen before any
+   formal result is inspected.
 
 ## Baseline contract
 

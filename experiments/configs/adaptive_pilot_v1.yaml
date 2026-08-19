@@ -1,0 +1,219 @@
+schema_version: 1
+config_id: adaptive_pilot_v1
+status: frozen
+
+revision:
+  supersedes: null
+  reason: initial_protocol
+
+provenance:
+  baseline_config: ../baseline/configs/baseline_reproduction.yaml
+  baseline_config_sha256: 4e76db7290ea755deae7f1e0cd556a7c84b60650dcce473ad3f052709aa83417
+  baseline_git_commit: 1bf5d8c7354d0b1cc5dd10034419bcff6800ba03
+  require_clean_worktree: true
+
+outputs:
+  root: outputs/adaptive_pilot_seed2001_4090
+  resolved_protocol: outputs/adaptive_pilot_seed2001_4090/resolved_config.yaml
+  input_manifest: outputs/adaptive_pilot_seed2001_4090/input_manifest.json
+  run_log: outputs/adaptive_pilot_seed2001_4090/run.log
+  run_metadata: outputs/adaptive_pilot_seed2001_4090/run_metadata.json
+  metrics: outputs/adaptive_pilot_seed2001_4090/metrics.jsonl
+  summary: outputs/adaptive_pilot_seed2001_4090/summary.json
+  pilot_gate_summary: outputs/adaptive_pilot_seed2001_4090/pilot_gate_summary.json
+  checkpoints: outputs/adaptive_pilot_seed2001_4090/checkpoints
+  scheduler_state: outputs/adaptive_pilot_seed2001_4090/scheduler_state
+
+immutability:
+  config_id_reuse_after_run_start: forbidden
+  frozen_parameter_change: create_new_versioned_config_id
+  write_resolved_config_at_run_start: true
+  config_sha256_destination: outputs.input_manifest
+  write_config_sha256_into_yaml: false
+  result_values_in_protocol_config: forbidden
+  allowed_result_formats:
+    - json
+    - jsonl
+    - csv
+
+input_integrity:
+  algorithm: sha256
+  required_for:
+    - pretrained_checkpoint
+    - baseline_calibration_metrics
+    - protocol_configs
+    - resolved_configs
+
+run:
+  id: adaptive_pilot_seed2001_4090
+  purpose: scheduler_validation_only
+  usable_for_h2_h3_decisions: false
+  seed: 2001
+  device: cuda
+  gpu_index: 0
+  deterministic: false
+  output_dir: outputs/adaptive_pilot_seed2001_4090
+
+budget:
+  max_gpu_hours: 6
+  max_wall_clock_hours: 8
+  max_iterations: 90
+  accounting_source: metrics.iteration_seconds
+  evaluation_time_included: false
+  stop_rule:
+    order:
+      - stop_after_the_first_completed_iteration_with_cumulative_gpu_hours_greater_than_or_equal_to_6
+      - stop_after_iteration_90
+      - stop_at_the_next_safe_iteration_boundary_before_8_wall_clock_hours_when_possible
+    do_not_start_iteration_when_wall_clock_safety_limit_would_clearly_be_exceeded: true
+    maximum_gpu_hour_overshoot: one_completed_iteration
+
+initialization:
+  mode: pretrained_checkpoint
+  checkpoint_path: ../baseline/outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
+  checkpoint_sha256: 4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667
+  load_weights: true
+  load_replay: false
+  load_optimizer_state: false
+  load_tracker_state: false
+  start_iteration: 1
+
+shared_algorithm_parameters:
+  authority: ../baseline/configs/baseline_reproduction.yaml
+  equality_contract:
+    path: configs/matched_compute_v1.yaml
+    sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
+  inherit_all_except:
+    - run
+    - budget
+    - self_play.games_per_iteration
+    - self_play.iterations
+    - checkpoint.directory
+    - checkpoint.save_every_iterations
+    - evaluation.evaluate_every_iterations
+    - adaptive_scheduler
+
+self_play:
+  games_per_iteration_source: adaptive_scheduler.next_iteration_games
+  iterations_safety_limit: 90
+
+adaptive_scheduler:
+  method: target_states
+  baseline_games: 75
+
+  target_states:
+    value: 2516
+    calibration_source: ../baseline/outputs/baseline_reproduction_seed1001_4090/metrics.jsonl
+    calibration_source_sha256: 5e9a8795b7ee27706eb9db42a675c59ed72147bc8261f714245020887bb4db4f
+    calibration_window:
+      start_iteration: 1
+      end_iteration: 40
+      rationale: h1_frozen_pre_plateau_window_inclusive
+    statistic: pooled_mean_game_length
+    statistic_formula: sum(positions_generated) / sum(games_completed)
+    derived_mean_game_length: 33.5363333333333
+    derivation: ceil(baseline_games * derived_mean_game_length)
+
+  length_estimator:
+    method: ema
+    observation_statistic: mean_valid_completed_game_length
+    window: null
+    alpha: 0.25
+    minimum_observations: 20
+    update_formula: alpha_times_iteration_mean_plus_one_minus_alpha_times_previous_ema
+
+  initialization:
+    first_iteration_games: 75
+    initial_length_source: target_states.calibration_source_and_window
+    initial_length_value: 33.5363333333333
+
+  bounds:
+    min_games: 50
+    max_games: 150
+
+  rounding: ceil
+  update_frequency: once_per_iteration
+  update_timing: after_iteration_is_complete_before_next_iteration_is_started
+  use_realised_game_length: true
+  calculation:
+    raw_next_games: target_states.value / length_estimator.current_value
+    order:
+      - update_length_estimator
+      - divide_target_by_estimated_length
+      - round_up_to_integer
+      - clip_to_bounds
+    clipping: after_rounding
+
+  observation_policy:
+    accepted: completed_games_with_integer_length_between_1_and_150_inclusive
+    abnormal_length: exclude_and_record
+    empty_game: exclude_and_record
+    incomplete_game: exclude_and_record
+    fewer_than_minimum_observations: keep_previous_estimator_and_next_game_plan
+    no_valid_observations: keep_previous_estimator_and_next_game_plan
+    non_finite_estimator: fail_run
+
+  state:
+    schema_version: 1
+    directory: outputs/adaptive_pilot_seed2001_4090/scheduler_state
+    save_frequency: every_completed_iteration_and_checkpoint
+    fields:
+      - completed_iteration
+      - valid_game_count
+      - excluded_game_count_by_reason
+      - per_iteration_mean_valid_game_length_history
+      - per_iteration_valid_game_count_history
+      - current_ema_length
+      - next_iteration_games
+      - clipping_decision
+      - scheduler_rng_state
+    resume:
+      supported_boundary: completed_iteration_only
+      restore_saved_next_iteration_games: true
+      recompute_next_iteration_games: false
+      restore_rng_state: true
+      equivalence_requirement: same_scheduler_decisions_replay_state_and_rng_stream_as_uninterrupted_execution
+
+checkpoint:
+  directory: outputs/adaptive_pilot_seed2001_4090/checkpoints
+  save_every_iterations: 1
+  save_replay_state: true
+  save_scheduler_state: true
+  save_instrumentation_state: true
+  save_rng_state: true
+  compute_sha256: true
+
+evaluation:
+  inherit_from: ../baseline/configs/baseline_reproduction.yaml
+  evaluate_every_iterations: 10
+  cost_accounting: excluded_from_training_gpu_hour_budget_and_recorded_separately
+
+pilot_gate:
+  require_completed_run: true
+  require_resume_equivalence: true
+  require_finite_metrics: true
+  require_scheduler_direction_correct: true
+  require_fresh_state_inflow_change: true
+
+  maximum_clipping_fraction: 0.10
+  clipping_fraction_definition: clipped_scheduler_updates / eligible_scheduler_updates
+  maximum_target_error: 0.20
+  target_error_definition: mean(abs(realised_valid_states - target_states) / target_states)_after_first_iteration
+  maximum_scheduler_overhead_fraction: 0.02
+  scheduler_overhead_fraction_definition: scheduler_seconds / iteration_seconds
+
+  direction_correct_definition:
+    shorter_estimated_length: next_unclipped_games_must_not_decrease
+    longer_estimated_length: next_unclipped_games_must_not_increase
+  fresh_state_inflow_change_definition: at_least_one_eligible_unclipped_plan_differs_from_75_games
+  resume_equivalence_test:
+    compare: uninterrupted_run_vs_iteration_boundary_interrupt_and_resume
+    required_equal_fields:
+      - planned_games_by_iteration
+      - scheduler_state_by_iteration
+      - replay_history_membership_by_iteration
+      - rng_state_after_each_completed_iteration
+  decision:
+    pass: all_required_checks_true_and_all_maxima_satisfied
+    fail: otherwise
+    parameter_changes_after_failure: require_adaptive_pilot_v2

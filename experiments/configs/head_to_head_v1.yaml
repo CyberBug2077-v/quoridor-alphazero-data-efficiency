@@ -1,0 +1,197 @@
+schema_version: 1
+config_id: head_to_head_v1
+status: frozen
+
+revision:
+  supersedes: null
+  reason: initial_protocol
+
+provenance:
+  baseline_config: ../baseline/configs/baseline_reproduction.yaml
+  baseline_config_sha256: 4e76db7290ea755deae7f1e0cd556a7c84b60650dcce473ad3f052709aa83417
+  baseline_git_commit: 1bf5d8c7354d0b1cc5dd10034419bcff6800ba03
+  require_clean_worktree: true
+
+outputs:
+  root: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1
+  resolved_protocol: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/input_manifest.json
+  run_log: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/run.log
+  games: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/games.jsonl
+  attempts: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/attempts.jsonl
+  evaluation_manifest: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/evaluation_manifest.json
+  checkpoint_pairs: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/checkpoint_pairs.csv
+  checkpoint_summary: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/checkpoint_summary.csv
+  summary: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/summary.json
+
+immutability:
+  config_id_reuse_after_run_start: forbidden
+  frozen_parameter_change: create_new_versioned_config_id
+  write_resolved_config_at_run_start: true
+  config_sha256_destination: outputs.input_manifest
+  write_config_sha256_into_yaml: false
+  result_values_in_protocol_config: forbidden
+  allowed_result_formats:
+    - json
+    - jsonl
+    - csv
+
+input_integrity:
+  algorithm: sha256
+  required_for:
+    - matched_compute_contract
+    - evaluated_checkpoints
+    - protocol_configs
+
+conditions:
+  contract: configs/matched_compute_v1.yaml
+  contract_sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
+  baseline_run_id: baseline_reproduction_seed1001_4090
+  adaptive_run_id: adaptive_formal_seed1001_4090
+
+model_selection:
+  baseline: final_checkpoint_at_common_horizon
+  adaptive: final_checkpoint_at_common_horizon
+  common_horizon_source: matched_compute.compute_budget.common_horizon
+  checkpoint_rule: latest_completed_checkpoint_not_after_common_horizon
+  allow_best_checkpoint: false
+  allow_outcome_based_substitution: false
+  interpolation: none
+  required_manifest_fields:
+    - condition
+    - checkpoint_iteration
+    - checkpoint_path
+    - actual_gpu_hours
+    - checkpoint_sha256
+  missing_either_model: fail_evaluation
+
+games:
+  total_games: 100
+  seed_pairs: 50
+  games_per_seed_pair: 2
+  pairing: same_seed_with_colours_swapped
+  baseline_first_games: 50
+  adaptive_first_games: 50
+  ordering:
+    games_0_through_49: baseline_first_adaptive_second
+    games_50_through_99: adaptive_first_baseline_second
+    colour_swap_pair: game_index_modulo_50
+  seed:
+    base_seed: 91001
+    algorithm: first_64_bits_big_endian_of_sha256
+    payload_fields:
+      - config_id
+      - base_seed
+      - baseline_checkpoint_sha256
+      - adaptive_checkpoint_sha256
+      - zero_based_seed_pair_index
+    separator: ascii_unit_separator_0x1f
+    same_seed_for_colour_swap_pair: true
+  max_turns: 150
+
+model_protocol:
+  mcts_simulations: 200
+  eval_mcts_in_batch: 4
+  cpuct: 1.25
+  temperature:
+    method: constant
+    value: 0.0
+    applies_from_model_move: 1
+  dirichlet_noise: false
+  tree_reset:
+    before_each_game: true
+    before_each_move: true
+    reuse_across_moves: false
+    reuse_across_games: false
+  identical_for_both_conditions: true
+
+outcomes:
+  perspective: adaptive
+  terminal_win: adaptive_is_rules_engine_winner
+  terminal_loss: baseline_is_rules_engine_winner
+  terminal_draw: rules_engine_reports_draw
+  max_turns:
+    classification: draw
+    score: 0.5
+    report_as_separate_termination_category: true
+  win_score: 1.0
+  draw_score: 0.5
+  loss_score: 0.0
+  score_rate_formula: (adaptive_wins + 0.5 * draws) / technically_valid_games
+
+technical_failures:
+  categories:
+    - invalid_move
+    - bot_error
+  count_as_game_outcome: false
+  count_in_score_rate_denominator: false
+  retry_allowed: true
+  retry_only_same_stable_game_key: true
+  retry_uses_same_seed_and_colour: true
+  unresolved_failure: evaluation_incomplete
+  non_technical_outcome_retry: forbidden
+
+stable_game_key:
+  fields:
+    - baseline_checkpoint_sha256
+    - adaptive_checkpoint_sha256
+    - zero_based_seed_pair_index
+    - adaptive_colour
+  uniqueness_required: true
+
+resume:
+  append_and_flush_after_each_attempt: true
+  skip_completed_technically_valid_game_keys: true
+  do_not_duplicate_completed_games: true
+  validate_existing_manifest_and_game_records: true
+  technical_failure_retry_requires_explicit_key: true
+  interrupted_and_uninterrupted_equivalence: same_final_set_of_stable_game_keys_and_outcomes
+
+analysis:
+  unit: game
+  point_estimate: mean_adaptive_score
+  interval:
+    method: nonparametric_stratified_bootstrap
+    strata:
+      - adaptive_colour
+    resamples: 10000
+    seed: 92001
+    confidence_level: 0.95
+    interval: percentile
+    preserve_games_per_colour: 50
+  report_by:
+    - actual_baseline_gpu_hours
+    - actual_adaptive_gpu_hours
+    - adaptive_colour
+    - termination
+  non_finite_result: fail_analysis
+  required_technically_valid_games: 100
+  incomplete_evaluation: no_score_or_confidence_interval
+
+per_game_audit:
+  required_fields:
+    - stable_game_key
+    - attempt_index
+    - seed_pair_index
+    - game_seed
+    - baseline_checkpoint_path
+    - baseline_checkpoint_sha256
+    - adaptive_checkpoint_path
+    - adaptive_checkpoint_sha256
+    - baseline_actual_gpu_hours
+    - adaptive_actual_gpu_hours
+    - baseline_colour
+    - adaptive_colour
+    - winner
+    - adaptive_result
+    - termination
+    - turns
+    - invalid_move_actor
+    - bot_error_actor
+    - duration_seconds
+    - baseline_move_times
+    - adaptive_move_times
+    - baseline_temperature_history
+    - adaptive_temperature_history
+    - technically_valid
+  retain_failed_attempts: true

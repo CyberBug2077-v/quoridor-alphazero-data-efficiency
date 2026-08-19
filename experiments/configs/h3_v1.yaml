@@ -1,0 +1,212 @@
+schema_version: 1
+config_id: h3_v1
+status: frozen
+
+revision:
+  supersedes: null
+  reason: initial_protocol
+
+provenance:
+  baseline_config: ../baseline/configs/baseline_reproduction.yaml
+  baseline_config_sha256: 4e76db7290ea755deae7f1e0cd556a7c84b60650dcce473ad3f052709aa83417
+  baseline_git_commit: 1bf5d8c7354d0b1cc5dd10034419bcff6800ba03
+  require_clean_worktree: true
+
+outputs:
+  root: outputs/adaptive_seed1001_4090_analysis/h3_v1
+  resolved_protocol: outputs/adaptive_seed1001_4090_analysis/h3_v1/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_analysis/h3_v1/input_manifest.json
+  run_log: outputs/adaptive_seed1001_4090_analysis/h3_v1/run.log
+  aligned_strength: outputs/adaptive_seed1001_4090_analysis/h3_v1/aligned_strength.csv
+  utility_curve: outputs/adaptive_seed1001_4090_analysis/h3_v1/utility_curve.csv
+  effects: outputs/adaptive_seed1001_4090_analysis/h3_v1/effects.csv
+  input_audit: outputs/adaptive_seed1001_4090_analysis/h3_v1/input_audit.json
+  decision: outputs/adaptive_seed1001_4090_analysis/h3_v1/decision.json
+  summary: outputs/adaptive_seed1001_4090_analysis/h3_v1/summary.json
+
+immutability:
+  config_id_reuse_after_run_start: forbidden
+  frozen_parameter_change: create_new_versioned_config_id
+  write_resolved_config_at_run_start: true
+  config_sha256_destination: outputs.input_manifest
+  write_config_sha256_into_yaml: false
+  result_values_in_protocol_config: forbidden
+  allowed_result_formats:
+    - json
+    - csv
+
+input_integrity:
+  algorithm: sha256
+  audit_before_analysis: true
+  record_all_actual_hashes_in: outputs.input_manifest
+  failure_policy: not_assessable
+  required_for:
+    - baseline_and_adaptive_fixed_basket_records
+    - joint_elo_summary
+    - head_to_head_records
+    - matched_compute_contract
+    - h2_decision
+    - protocol_configs
+
+analysis_scope:
+  analysis_only: true
+  controls_training: false
+  pilot_results_eligible: false
+
+hypothesis:
+  id: H3
+  statement: Across the common GPU-hour horizon, Adaptive improves playing-strength utility and is not supported only by checkpoint selection.
+
+inputs:
+  matched_compute:
+    path: configs/matched_compute_v1.yaml
+    sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
+  baseline_fixed_basket_records:
+    path: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+    sha256: 228b088fd09bf584e424fb5d81eb3309d7496316cb15d6e9bae7baf2d1b95425
+  baseline_fixed_basket_checkpoint_summary:
+    path: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
+    sha256: 44f528e10907572637c361e48b25649f36c5480f77ff79bf36eba89503074155
+  adaptive_fixed_basket_protocol:
+    path: configs/adaptive_fixed_basket_v1.yaml
+    sha256: f2efbf8d31af6b5fa69d006d8e037e7b79ca0ad0586d73e4963a5e020971fb1a
+  adaptive_fixed_basket_records:
+    path: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+    sha256: null
+    sha256_required_in_input_manifest: true
+  adaptive_fixed_basket_checkpoint_summary:
+    path: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
+    sha256: null
+    sha256_required_in_input_manifest: true
+  joint_elo_summary:
+    path: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/joint_elo_summary.csv
+    sha256: null
+    sha256_required_in_input_manifest: true
+  head_to_head_protocol:
+    path: configs/head_to_head_v1.yaml
+    sha256: ff4015d0aeea95f91c22fde4865b8b17443afd249894010f91a9138a3d4b695d
+  head_to_head_records:
+    path: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/games.jsonl
+    sha256: null
+    sha256_required_in_input_manifest: true
+  head_to_head_summary:
+    path: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/summary.json
+    sha256: null
+    sha256_required_in_input_manifest: true
+  h2_protocol:
+    path: configs/h2_v1.yaml
+    sha256: 5b634bbc1126fe04eaf95a7a2004f5c75a5564d85f25605606aeaf0ed56ef1e1
+  h2_decision:
+    path: outputs/adaptive_seed1001_4090_analysis/h2_v1/decision.json
+    sha256: null
+    sha256_required_in_input_manifest: true
+
+gpu_hour_alignment:
+  common_horizon: minimum_available_gpu_hours_capped_at_24
+  source: matched_compute.compute_budget.common_horizon
+  x_coordinate: matched_baseline_reference_gpu_hour_target
+  checkpoint_selection: latest_completed_checkpoint_not_after_target
+  require_same_targets_for_baseline_and_adaptive: true
+  require_checkpoint_0: true
+  checkpoint_0_identity: shared_pretrained_checkpoint
+  interpolation_of_model_parameters: none
+
+primary_metric:
+  name: joint_elo_gpu_hour_aulc
+  source: joint_elo_summary
+  curves:
+    baseline: baseline_matched_checkpoint_joint_elo
+    adaptive: adaptive_matched_checkpoint_joint_elo
+  common_gpu_hour_range:
+    start: 0.0
+    end: common_horizon
+    include_checkpoint_0: true
+    require_complete_shared_coverage: true
+  integration: trapezoidal
+  interpolation: piecewise_linear
+  extrapolation: none
+  normalize_by_interval_length: true
+  unit_after_normalization: elo
+  effect: adaptive_normalized_aulc - baseline_normalized_aulc
+  expected_direction: greater_than_zero
+  practical_effect_tolerance:
+    improvement_at_or_above_elo: 20.0
+    material_deterioration_at_or_below_elo: -20.0
+
+other_strength_metrics:
+  final_joint_elo:
+    definition: joint_elo_at_final_shared_gpu_hour_target
+    effect: adaptive - baseline
+    support_threshold_elo: 20.0
+
+  final_fixed_basket_macro_score:
+    formula: equal_weight_mean_of_four_opponent_score_rates_at_final_shared_target
+    effect: adaptive - baseline
+    support_threshold_absolute_score: 0.02
+
+  best_joint_elo:
+    definition: maximum_observed_joint_elo_on_shared_grid_within_common_horizon
+    tie_break: earliest_gpu_hour_target
+    best_checkpoint_selection_for_evaluation: forbidden
+    descriptive_only: true
+
+  time_to_threshold:
+    metric: fixed_basket_macro_score
+    threshold: 0.86
+    threshold_source:
+      definition: baseline_checkpoint_0_macro_score_plus_pre_registered_0.02_gain
+      baseline_checkpoint_0_macro_score: 0.84
+      source_file: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
+      source_sha256: 44f528e10907572637c361e48b25649f36c5480f77ff79bf36eba89503074155
+    crossing_rule: first_observed_shared_grid_target_with_score_greater_than_or_equal_to_0.86
+    crossing_interpolation: none
+    failure_to_reach: right_censored_at_common_horizon
+    lower_is_better: true
+
+  observed_maximum_drawdown:
+    metric: joint_elo
+    observed_grid_only: true
+    running_best_definition: maximum_joint_elo_from_checkpoint_0_through_current_target
+    drawdown_definition: running_best_joint_elo - current_joint_elo
+    maximum_drawdown_definition: maximum_drawdown_over_shared_grid
+    effect: baseline_maximum_drawdown - adaptive_maximum_drawdown
+    support_threshold_elo: 10.0
+    higher_effect_is_better: true
+
+  final_head_to_head:
+    metric: adaptive_score_rate
+    formula: (adaptive_wins + 0.5 * draws) / 100_technically_valid_games
+    null_value: 0.5
+    confidence_interval: colour_stratified_bootstrap_95_percent
+    support_rule: confidence_interval_lower_bound_greater_than_0.5
+
+corroborating_support:
+  final_support: final_joint_elo_effect_at_least_20_or_final_fixed_basket_macro_score_effect_at_least_0.02
+  stability_support: baseline_minus_adaptive_maximum_drawdown_at_least_10_elo
+  head_to_head_support: final_head_to_head_95_percent_ci_lower_bound_greater_than_0.5
+  any_consistent_support: final_support_or_stability_support_or_head_to_head_support
+
+decision:
+  statuses:
+    - supported
+    - partially_supported
+    - not_supported
+    - not_assessable
+  aulc_improved: normalized_joint_elo_aulc_effect_at_least_20_elo
+  supported: aulc_improved_and_any_consistent_support
+  partially_supported: aulc_improved_without_consistent_support_or_aulc_not_improved_with_at_least_one_consistent_support
+  not_supported: aulc_is_assessable_and_aulc_improved_is_false_and_no_consistent_support
+  not_assessable: input_audit_failed_or_incomplete_shared_grid_coverage_or_missing_checkpoint_0_or_missing_common_horizon_endpoint_or_joint_elo_not_from_one_joint_fit
+  report_all_metric_disagreements: true
+
+attribution:
+  h3_decision_independent_of_h2_decision: true
+  require_h2_support_for_replay_mechanism_claim: true
+  h3_supported_without_h2_support: report_performance_improvement_without_replay_mechanism_attribution
+
+missing_values:
+  non_finite_numeric_value: error
+  missing_shared_grid_point: not_assessable
+  imputation: none
+  primary_curve_interpolation: piecewise_linear_between_observed_shared_points_only
+  extrapolation: none

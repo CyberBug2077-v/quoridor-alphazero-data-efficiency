@@ -1,0 +1,211 @@
+schema_version: 1
+config_id: matched_compute_v1
+status: frozen
+
+revision:
+  supersedes: null
+  reason: initial_protocol
+
+provenance:
+  baseline_config: ../baseline/configs/baseline_reproduction.yaml
+  baseline_config_sha256: 4e76db7290ea755deae7f1e0cd556a7c84b60650dcce473ad3f052709aa83417
+  baseline_git_commit: 1bf5d8c7354d0b1cc5dd10034419bcff6800ba03
+  require_clean_worktree: true
+
+outputs:
+  root: outputs/matched_compute_v1
+  resolved_protocol: outputs/matched_compute_v1/resolved_config.yaml
+  input_manifest: outputs/matched_compute_v1/input_manifest.json
+  run_log: outputs/matched_compute_v1/run.log
+
+immutability:
+  config_id_reuse_after_run_start: forbidden
+  frozen_parameter_change: create_new_versioned_config_id
+  write_resolved_config_at_run_start: true
+  config_sha256_destination: outputs.input_manifest
+  write_config_sha256_into_yaml: false
+  result_values_in_protocol_config: forbidden
+  allowed_result_formats:
+    - json
+    - jsonl
+    - csv
+
+input_integrity:
+  algorithm: sha256
+  required_for:
+    - pretrained_checkpoint
+    - datasets
+    - protocol_configs
+    - resolved_configs
+
+conditions:
+  baseline:
+    run_id: baseline_reproduction_seed1001_4090
+    resolved_config: ../baseline/outputs/baseline_reproduction_seed1001_4090/resolved_config.yaml
+    resolved_config_sha256: c6b2eab4b3f7b19fc50c66a95815b5075673be2359632db0ac547c01c7aa012e
+    run_metadata: ../baseline/outputs/baseline_reproduction_seed1001_4090/run_metadata.json
+    run_metadata_sha256: 8575be467766ed1f4125e303da278ba3b4e70b4f20c9e9e657673e8ef03fa8e9
+    metrics: ../baseline/outputs/baseline_reproduction_seed1001_4090/metrics.jsonl
+    metrics_sha256: 5e9a8795b7ee27706eb9db42a675c59ed72147bc8261f714245020887bb4db4f
+  adaptive:
+    run_id: adaptive_formal_seed1001_4090
+    formal_config: configs/adaptive_formal_v1.yaml
+    resolved_config: outputs/adaptive_formal_seed1001_4090/resolved_config.yaml
+    run_metadata: outputs/adaptive_formal_seed1001_4090/run_metadata.json
+    metrics: outputs/adaptive_formal_seed1001_4090/metrics.jsonl
+
+common_initialization:
+  mode: pretrained_checkpoint
+  checkpoint_path: ../baseline/outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
+  checkpoint_sha256: 4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667
+  load_weights: true
+  load_replay: false
+  load_optimizer_state: false
+  load_tracker_state: false
+  start_iteration: 1
+
+shared_algorithm_parameters:
+  authority: provenance.baseline_config
+  comparison: exact_value_equality_after_resolution
+  fields:
+    - model.board_size
+    - model.num_channels
+    - model.num_res_blocks
+    - model.attn_depth
+    - model.num_heads
+    - model.se_enabled
+    - model.dropout
+    - self_play.mcts_simulations
+    - self_play.eval_mcts_in_batch
+    - self_play.temperature_threshold
+    - self_play.cpuct
+    - self_play.dirichlet_noise
+    - self_play.dirichlet_alpha
+    - self_play.dirichlet_epsilon
+    - self_play.max_game_length
+    - training.epochs
+    - training.batch_size
+    - training.micro_batch_size
+    - training.learning_rate
+    - training.optimizer
+    - training.weight_decay
+    - training.gradient_clip
+    - training.amp
+    - training.amp_dtype
+    - training.update_gating
+    - replay.max_queue_size
+    - replay.max_train_samples
+    - replay.history_iterations
+    - evaluation.games_per_opponent
+    - evaluation.opponents
+    - evaluation.model_mcts_simulations
+    - evaluation.eval_mcts_in_batch
+    - evaluation.temperature
+    - evaluation.dirichlet_noise
+    - evaluation.max_game_length
+    - evaluation.alternate_starting_player
+
+allowed_condition_differences:
+  - self_play.games_per_iteration
+  - adaptive_scheduler
+  - resulting_iterations
+  - resulting_optimizer_steps
+  - resulting_resource_allocation
+
+compute_budget:
+  primary_axis: gpu_hours
+  nominal_budget_gpu_hours: 24
+  allocated_gpu_count: 1
+  accumulation:
+    formula: sum(iteration_seconds * allocated_gpu_count) / 3600
+    measured_interval: completed_training_iterations
+    includes:
+      - self_play
+      - network_training
+      - iteration_instrumentation_overhead
+    excludes:
+      - offline_evaluation
+      - online_evaluation
+    instrumentation_overhead_included: true
+    evaluation_time_included: false
+  auxiliary_axis: completed_iterations
+  budget_crossing:
+    check_timing: after_each_completed_iteration
+    policy: keep_crossing_iteration_and_do_not_start_another
+    maximum_overshoot: one_completed_iteration
+    record_overshoot_gpu_hours: true
+  common_horizon:
+    method: minimum_available_gpu_hours
+    maximum_gpu_hours: 24
+
+checkpoint_alignment:
+  reference: baseline_checkpoint_gpu_hours
+  adaptive_selection: latest_completed_checkpoint_not_after_target
+  interpolation: none_for_game_evaluation
+  numeric_metric_interpolation:
+    default: none
+    h3_joint_elo_gpu_hour_aulc: piecewise_linear_between_observed_shared_grid_points
+
+pairing_and_randomness:
+  formal_seed: 1001
+  opponent_seeds_paired: true
+  colour_assignment:
+    method: paired_seed_with_alternating_model_side
+    balance: equal_games_as_first_and_second_player
+  checkpoint_grid:
+    axis: gpu_hours
+    reference: baseline_fixed_basket_checkpoint_iterations
+    targets:
+      - baseline_checkpoint_iteration: 0
+        gpu_hours: 0.0
+        checkpoint_path: ../baseline/outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
+        checkpoint_sha256: 4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667
+      - baseline_checkpoint_iteration: 20
+        gpu_hours: 2.1198430262922514
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_20.pth.tar
+        checkpoint_sha256: 05e198adaf5fec75d82542a5539cdfeb50c63e7350da7867370650d40bb5782a
+      - baseline_checkpoint_iteration: 40
+        gpu_hours: 4.055928015003963
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_40.pth.tar
+        checkpoint_sha256: d1e133648b109ac8ecc6bdb504583a84ce9d0d7e4f0c964a77bb160a55ed1372
+      - baseline_checkpoint_iteration: 60
+        gpu_hours: 5.915037855762831
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_60.pth.tar
+        checkpoint_sha256: a70121f322a97d1fa7c5a3ef0cd9406f05ea44e6a6a29513ee8b55b3310309c2
+      - baseline_checkpoint_iteration: 80
+        gpu_hours: 7.74554526080817
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_80.pth.tar
+        checkpoint_sha256: b4ab90b0217a54a8dc55af91907935a9daaa8f1a32faa0055d9b7992197aa268
+      - baseline_checkpoint_iteration: 100
+        gpu_hours: 9.657539357861964
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_100.pth.tar
+        checkpoint_sha256: d24dae541bcb084c51255f82fe43e078bf1dd75f96912146d4a106a5f83c4e38
+      - baseline_checkpoint_iteration: 120
+        gpu_hours: 11.578118647181476
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_120.pth.tar
+        checkpoint_sha256: 8656f812e9e3ff911a916c8173e31f7c6685ab79ce194fea0e24562778123b41
+      - baseline_checkpoint_iteration: 140
+        gpu_hours: 13.49890914103404
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_140.pth.tar
+        checkpoint_sha256: 97389f372f82c1dd5e3618bedbef8286c273ff8420e88c305157a67b46bf5c0e
+      - baseline_checkpoint_iteration: 160
+        gpu_hours: 15.400869534123915
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_160.pth.tar
+        checkpoint_sha256: 8f2d050c2bacbd24168b283f26ee4e79d85a808bb46607ed6d6a1116f87d95a5
+      - baseline_checkpoint_iteration: 180
+        gpu_hours: 17.276270976930004
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_180.pth.tar
+        checkpoint_sha256: 96253a6cbca5c9857a9721fd77e89deb1930362e68e9dbc6665eec1ca9871eb1
+      - baseline_checkpoint_iteration: 200
+        gpu_hours: 19.115693432471787
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_200.pth.tar
+        checkpoint_sha256: a1827d62809198179b0eba094bf631aafe2b0cc20255ed53237aa38977903a39
+      - baseline_checkpoint_iteration: 210
+        gpu_hours: 20.004163361943395
+        checkpoint_path: ../baseline/outputs/baseline_reproduction_seed1001_4090/checkpoints/checkpoint_210.pth.tar
+        checkpoint_sha256: 6bbe4d8a2bc44dce2eeb80a0e6f9ea3cc7d02032bdc024395e09d73cc46ee417
+    truncate_at: compute_budget.common_horizon
+  missing_checkpoint_policy: mark_target_unavailable
+  duplicate_selected_checkpoint_policy: evaluate_once_and_reuse_attribution
+  outcome_based_checkpoint_substitution: forbidden
+  post_result_checkpoint_replacement: forbidden

@@ -1,0 +1,261 @@
+schema_version: 1
+config_id: adaptive_fixed_basket_v1
+status: frozen
+
+revision:
+  supersedes: null
+  reason: initial_protocol
+
+provenance:
+  baseline_config: ../baseline/configs/baseline_reproduction.yaml
+  baseline_config_sha256: 4e76db7290ea755deae7f1e0cd556a7c84b60650dcce473ad3f052709aa83417
+  baseline_git_commit: 1bf5d8c7354d0b1cc5dd10034419bcff6800ba03
+  require_clean_worktree: true
+
+outputs:
+  root: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1
+  resolved_protocol: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/input_manifest.json
+  run_log: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/evaluation.log
+  evaluation_manifest: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/evaluation_manifest.json
+  games: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+  checkpoint_summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
+  opponent_summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/opponent_summary.csv
+  provisional_elo_summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/elo_summary.csv
+  joint_elo_summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/joint_elo_summary.csv
+  summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/summary.json
+  evaluation_log: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/evaluation.log
+
+immutability:
+  config_id_reuse_after_run_start: forbidden
+  frozen_parameter_change: create_new_versioned_config_id
+  write_resolved_config_at_run_start: true
+  config_sha256_destination: outputs.input_manifest
+  write_config_sha256_into_yaml: false
+  result_values_in_protocol_config: forbidden
+  allowed_result_formats:
+    - json
+    - jsonl
+    - csv
+
+input_integrity:
+  algorithm: sha256
+  required_for:
+    - source_protocol
+    - evaluated_checkpoints
+    - opponent_implementations
+    - protocol_configs
+    - baseline_fixed_basket_games
+
+base_protocol:
+  config: ../baseline/analysis/configs/fixed_basket_v1.yaml
+  protocol_id: fixed_basket_v1
+  expected_sha256: 3962b1e26130f0d50d5432188cda189e00ea5fb6ac98ea30f380f76051d086f9
+  inheritance: exact_evaluation_settings
+
+evaluated_condition:
+  run_id: adaptive_formal_seed1001_4090
+  run_root: outputs/adaptive_formal_seed1001_4090
+  run_metadata: outputs/adaptive_formal_seed1001_4090/run_metadata.json
+  checkpoint_manifest: outputs/adaptive_formal_seed1001_4090/checkpoint_manifest.json
+
+checkpoint_alignment:
+  contract: configs/matched_compute_v1.yaml
+  contract_sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
+  axis: gpu_hours
+  matched_gpu_hour_targets:
+    - baseline_checkpoint_iteration: 0
+      gpu_hours: 0.0
+    - baseline_checkpoint_iteration: 20
+      gpu_hours: 2.1198430262922514
+    - baseline_checkpoint_iteration: 40
+      gpu_hours: 4.055928015003963
+    - baseline_checkpoint_iteration: 60
+      gpu_hours: 5.915037855762831
+    - baseline_checkpoint_iteration: 80
+      gpu_hours: 7.74554526080817
+    - baseline_checkpoint_iteration: 100
+      gpu_hours: 9.657539357861964
+    - baseline_checkpoint_iteration: 120
+      gpu_hours: 11.578118647181476
+    - baseline_checkpoint_iteration: 140
+      gpu_hours: 13.49890914103404
+    - baseline_checkpoint_iteration: 160
+      gpu_hours: 15.400869534123915
+    - baseline_checkpoint_iteration: 180
+      gpu_hours: 17.276270976930004
+    - baseline_checkpoint_iteration: 200
+      gpu_hours: 19.115693432471787
+    - baseline_checkpoint_iteration: 210
+      gpu_hours: 20.004163361943395
+  selection: latest_completed_checkpoint_not_after_target
+  include_initial_checkpoint: true
+  truncate_at_common_horizon: true
+  final_checkpoint: latest_completed_checkpoint_not_after_common_horizon
+  missing_checkpoint: mark_target_unavailable_and_report
+  checkpoint_after_target_as_fallback: forbidden
+  model_parameter_interpolation: none
+  outcome_based_checkpoint_substitution: forbidden
+
+checkpoint_registry:
+  source: outputs/adaptive_formal_seed1001_4090/checkpoint_manifest.json
+  write_selected_registry_to: outputs.evaluation_manifest
+  checkpoint_0:
+    baseline_checkpoint_iteration: 0
+    checkpoint_iteration: 0
+    checkpoint_path: ../baseline/outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
+    actual_gpu_hours: 0.0
+    checkpoint_sha256: 4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667
+  required_fields_per_selected_checkpoint:
+    - baseline_checkpoint_iteration
+    - gpu_hour_target
+    - adaptive_checkpoint_iteration
+    - adaptive_checkpoint_path
+    - adaptive_actual_gpu_hours
+    - adaptive_checkpoint_sha256
+    - selection_rule
+  verify_checkpoint_sha256_before_games: true
+
+pairing:
+  base_seed: 1001
+  same_opponent_seed_for_baseline_and_adaptive: true
+  same_model_colour_for_baseline_and_adaptive: true
+  games_per_opponent: 50
+  alternate_sides: true
+  side_schedule:
+    model_white_game_indices: 0_through_24
+    model_black_game_indices: 25_through_49
+    games_per_colour: 25
+  stable_seed:
+    algorithm: first_32_bits_big_endian_of_sha256
+    payload_fields:
+      - protocol_id
+      - base_seed
+      - baseline_checkpoint_iteration
+      - opponent_id
+      - zero_based_game_index
+    separator: ascii_unit_separator_0x1f
+    protocol_id_value: fixed_basket_v1
+    checkpoint_component: matched_baseline_checkpoint_iteration
+    rationale: preserve_baseline_adaptive_opponent_seed_pairing_at_each_gpu_hour_target
+
+game:
+  max_turns: 150
+  max_turns_termination: valid_draw_and_report_separately
+
+model:
+  use_mcts: true
+  num_mcts_sims: 200
+  eval_mcts_in_batch: 4
+  cpuct: 1.25
+  clear_tree_each_move: true
+  early_temperature: 0.18
+  early_temperature_moves_per_player: 5
+  later_temperature: 0.0
+  dirichlet_noise: false
+
+opponents:
+  - id: heuristic_20
+    type: js_mcts
+    rollouts: 20
+  - id: heuristic_200
+    type: js_mcts
+    rollouts: 200
+  - id: greedy_random_50
+    type: random_greedy
+    greedy_probability: 0.5
+  - id: random
+    type: random
+
+execution_integrity:
+  stable_game_key:
+    - baseline_checkpoint_iteration
+    - opponent_id
+    - zero_based_game_index
+  append_and_flush_after_each_completed_game: true
+  duplicate_game_key: error
+  invalid_move_termination: formal_evaluation_failure
+  bot_error_termination: formal_evaluation_failure
+  non_null_fault: formal_evaluation_failure
+  js_invalid_proposal_retries_per_move: 32
+  js_retry_exhausted: bot_error
+  source_run_mutation: forbidden
+
+resume:
+  require_explicit_resume_when_games_file_exists: true
+  require_existing_games_file: true
+  require_matching_protocol_and_checkpoint_registry: true
+  skip_completed_stable_game_keys: true
+  preserve_seed_and_side_assignment: true
+  automatic_retry: false
+  retry_allowed_only_after_diagnosis:
+    termination_values:
+      - invalid_move
+      - bot_error
+    explicit_stable_game_key: true
+  retry_action: remove_selected_record_then_replay_same_stable_key
+  interrupted_and_uninterrupted_equivalence: identical_set_of_stable_game_records
+
+acceptance:
+  games_per_checkpoint_opponent: 50
+  games_per_model_colour: 25
+  unique_stable_game_keys_required: true
+  invalid_move_terminations: 0
+  bot_error_terminations: 0
+  non_null_faults: 0
+  temperature_schedule_mismatch: 0
+
+confidence_intervals:
+  fixed_basket_score:
+    method: nonparametric_stratified_bootstrap
+    strata:
+      - opponent
+      - model_colour
+    resamples: 10000
+    confidence_level: 0.95
+    seed_derivation: stable_seed_using_protocol_checkpoint_stratum_and_base_seed
+
+joint_elo:
+  required: true
+  inputs:
+    baseline_games:
+      path: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+      sha256: 228b088fd09bf584e424fb5d81eb3309d7496316cb15d6e9bae7baf2d1b95425
+    baseline_evaluation_manifest:
+      path: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/evaluation_manifest.json
+      sha256: 54226d9d3d919e89621ee1fd3292f41f2ccdc4d1f5846d6cde0985f4ff2f2db2
+    adaptive_games: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+  participants:
+    - baseline_matched_checkpoints
+    - adaptive_matched_checkpoints
+    - heuristic_20
+    - heuristic_200
+    - greedy_random_50
+    - random
+  fixed_opponents_role: shared_anchors
+  fit_scope: one_joint_model_over_all_baseline_adaptive_and_anchor_games
+  separately_fitted_absolute_elo_comparison: forbidden
+  location_constraint: mean_fixed_opponent_elo_equals_zero
+  fit:
+    method: stable_iterative_elo
+    k_factor: 16.0
+    max_iterations: 2000
+    random_seed: 1001
+  uncertainty:
+    method: nonparametric_stratified_bootstrap_and_refit_joint_elo
+    strata:
+      - condition
+      - matched_gpu_hour_target
+      - opponent
+      - model_colour
+    resamples: 10000
+    random_seed: 94001
+    confidence_level: 0.95
+    interval: percentile
+  required_outputs:
+    - outputs.checkpoint_summary
+    - outputs.opponent_summary
+    - outputs.joint_elo_summary
+  provisional_condition_only_elo:
+    allowed_for_diagnostics: true
+    comparable_across_separate_fits: false
