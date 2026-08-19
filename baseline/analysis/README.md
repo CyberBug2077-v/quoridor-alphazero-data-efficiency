@@ -404,9 +404,28 @@ The aligned table is presentation data only. H1 effects use training iterations,
 replay-snapshot iterations, or evaluation checkpoints according to each metric's
 registered `analysis_grain`, and classify descriptive OLS slope and endpoint
 agreement without a significance test.
-It then writes `aligned_checkpoint_metrics.csv`, `h1_effects.csv`,
+It then writes `aligned_checkpoint_metrics.csv`, `diagnostic_time_series.csv`,
+`h1_effects.csv`,
 `h1_decision.json`, and `h1_summary.md` under `h1_v1_1/`, and updates
 `gate2/summary.json` with the plateau/H1 statuses and product hashes.
+
+Render the two frozen H1 figures from the repository root with:
+
+```powershell
+python plots/baseline/plot_h1_evidence.py
+```
+
+The plotting script reads only `diagnostic_time_series.csv`,
+`aligned_checkpoint_metrics.csv`, `h1_effects.csv`, `plateau.json`, and
+`h1_decision.json`. It does not reopen raw training, replay, hold-out, or
+fixed-basket logs. Figure 5.1 uses fixed-basket macro score (win = 1,
+draw = 0.5, loss = 0) with 95% bootstrap intervals. Figure 5.2 aligns the
+source-native diagnostic grains on cumulative GPU-hours while keeping
+post-onset-only observations visually distinct from H1 trend inputs.
+The rendered PNG files are written to `plots/figures/baseline/`. Figure 5.2 is
+available both as an appendix composite and as four standalone panels; every
+standalone panel repeats the plateau and observability context needed to read it
+without another panel on the same page.
 
 An effect needs at least four valid points at its registered source grain. When the plateau is not
 reproduced, the full-run effects are labelled descriptive only and H1 is
@@ -440,6 +459,7 @@ The repository does not currently assign final dissertation figure numbers. Duri
 | Hold-out trajectory sensitivity | `holdout_v1/trajectory_checkpoint_metrics.csv` | Checkpoint-by-game loss distributions without treating within-game states as independent trajectories |
 | Hold-out provenance and integrity | `holdout_v1/protocol.resolved.yaml`, `holdout_v1/manifest.json`, `holdout_v1/summary.json` | Dataset source hash, exact self-play protocol, state schema, checkpoint hashes, and evaluation definitions |
 | Aligned H1 evidence and Figure 5.1 annotations | `h1_v1_1/aligned_checkpoint_metrics.csv`, `h1_v1_1/h1_effects.csv` | Twelve-checkpoint presentation table plus source-native iteration/checkpoint effects, observability, best/final points, running best, and drawdown markers |
+| Diagnostic evidence time series | `h1_v1_1/diagnostic_time_series.csv` | Long-form full-run supply, replay proxy, snapshot diversity, hold-out gap, and fixed-basket series with observability and H1-trend inclusion flags |
 | H1 decision | `h1_v1_1/h1_decision.json`, `h1_v1_1/h1_summary.md` | Supply, replay proxy, snapshot diversity, approximate train–hold-out gap, temporal alignment, and the final H1 status |
 | Methods and reproducibility appendix | `evaluation_manifest.json`, `protocol.resolved.yaml` | Seeds, checkpoint provenance, protocol, source-integrity status, and data-quality notes |
 | Per-game audit | `fixed_basket_v1/games.jsonl` | Trace abnormal termination, turn-limit games, colours, and game seeds; not a main result table |

@@ -162,6 +162,7 @@ outputs:
   h1_protocol: outputs/baseline_seed1001_4090_analysis/h1_v1_1/protocol.resolved.yaml
   h1_input_manifest: outputs/baseline_seed1001_4090_analysis/h1_v1_1/input_manifest.json
   h1_aligned_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/h1_v1_1/aligned_checkpoint_metrics.csv
+  h1_diagnostic_time_series: outputs/baseline_seed1001_4090_analysis/h1_v1_1/diagnostic_time_series.csv
   h1_effects: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_effects.csv
   h1_decision: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_decision.json
   h1_summary: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_summary.md

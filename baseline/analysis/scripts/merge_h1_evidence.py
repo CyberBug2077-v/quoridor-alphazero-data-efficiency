@@ -110,6 +110,20 @@ EFFECT_FIELDS = (
     "limitation",
 )
 
+DIAGNOSTIC_FIELDS = (
+    "evidence_stage",
+    "metric",
+    "analysis_grain",
+    "iteration",
+    "checkpoint",
+    "gpu_hours",
+    "value",
+    "observable",
+    "used_in_h1_trend",
+    "is_at_or_before_plateau",
+    "is_after_plateau",
+)
+
 EFFECT_SPECS = (
     ("supply", "fresh_states_per_update", "decrease", "training_iteration"),
     ("supply", "buffer_inflow_fraction", "decrease", "training_iteration"),
@@ -1119,7 +1133,8 @@ def build_replay_iteration_effect_rows(
                 row.get("duplicate_rate"), "duplicate_rate"
             ),
             "state_effective_ratio": _optional_float(
-                row.get("state_effective_ratio"), "state_effective_ratio"
+                _ratio_value(row, "state_effective_count", "states"),
+                "state_effective_ratio",
             ),
         }
         for metric, value in values.items():
@@ -1171,6 +1186,263 @@ def build_checkpoint_effect_rows(
             if point is not None:
                 points.append(point)
     return points
+
+
+def build_diagnostic_time_series(
+    raw_metrics: Sequence[Mapping[str, Any]],
+    derived_metrics: Sequence[Mapping[str, Any]],
+    replay_metrics: Sequence[Mapping[str, Any]],
+    holdout_rows: Sequence[Mapping[str, Any]],
+    fixed_basket_rows: Sequence[Mapping[str, Any]],
+    plateau_result: Mapping[str, Any],
+    *,
+    minimum_points: int = 4,
+) -> list[dict[str, Any]]:
+    raw_by_iteration = _index_iterations(raw_metrics, "raw metric")
+    derived_by_iteration = _index_iterations(derived_metrics, "derived metric")
+    if set(raw_by_iteration) != set(derived_by_iteration):
+        raise H1InputError("raw and derived iteration sets differ")
+    replay_by_iteration = _index_iterations(replay_metrics, "replay metric")
+    holdout_by_checkpoint = _index_checkpoints(holdout_rows, "holdout")
+    fixed_by_checkpoint = _index_checkpoints(fixed_basket_rows, "fixed-basket")
+    if set(holdout_by_checkpoint) != set(fixed_by_checkpoint):
+        raise H1InputError("holdout and fixed-basket checkpoint sets differ")
+
+    plateau_start = _plateau_start_checkpoint(plateau_result)
+    plateau_detected = plateau_start is not None
+    effect_metrics = {metric for _, metric, _, _ in EFFECT_SPECS}
+    rows: list[dict[str, Any]] = []
+
+    def append_row(
+        *,
+        evidence_stage: str,
+        metric: str,
+        analysis_grain: str,
+        iteration: int | None,
+        checkpoint: int | None,
+        gpu_hours: float | None,
+        value: float | None,
+        observable: bool,
+    ) -> None:
+        coordinate = iteration if iteration is not None else checkpoint
+        if coordinate is None:
+            raise H1InputError("diagnostic row has no time coordinate")
+        at_or_before = plateau_detected and coordinate <= plateau_start
+        after = plateau_detected and coordinate > plateau_start
+        rows.append(
+            {
+                "evidence_stage": evidence_stage,
+                "metric": metric,
+                "analysis_grain": analysis_grain,
+                "iteration": iteration,
+                "checkpoint": checkpoint,
+                "gpu_hours": gpu_hours,
+                "value": value if observable else None,
+                "observable": observable,
+                "used_in_h1_trend": False,
+                "is_at_or_before_plateau": at_or_before,
+                "is_after_plateau": after,
+            }
+        )
+
+    for iteration in sorted(raw_by_iteration):
+        raw = raw_by_iteration[iteration]
+        derived = derived_by_iteration[iteration]
+        if _required_int(
+            raw.get("positions_generated"), "raw positions_generated"
+        ) != _required_int(
+            derived.get("positions_generated"), "derived positions_generated"
+        ):
+            raise H1InputError(
+                f"raw and derived positions differ at iteration {iteration}"
+            )
+        gpu_hours = _optional_float(
+            raw.get("cumulative_gpu_hours"), "cumulative_gpu_hours"
+        )
+        training_values = (
+            (
+                "supply",
+                "fresh_states_per_update",
+                _ratio_value(raw, "positions_generated", "optimizer_steps"),
+                True,
+            ),
+            (
+                "supply",
+                "buffer_inflow_fraction",
+                _ratio_value(raw, "positions_generated", "replay_buffer_size"),
+                True,
+            ),
+            (
+                "supply",
+                "states_per_gpu_hour",
+                _ratio_value(
+                    raw, "positions_generated", "iteration_seconds", 3600.0
+                ),
+                True,
+            ),
+            (
+                "replay_pressure",
+                "mean_sample_exposure",
+                _ratio_value(raw, "samples_seen", "replay_buffer_size"),
+                True,
+            ),
+            (
+                "replay_pressure",
+                "selected_sample_reuse",
+                _ratio_value(raw, "samples_seen", "examples_used"),
+                True,
+            ),
+            (
+                "replay_pressure",
+                "mean_sample_age",
+                _optional_float(derived.get("mean_sample_age"), "mean_sample_age"),
+                True,
+            ),
+            (
+                "replay_pressure",
+                "p90_sample_age",
+                _optional_float(derived.get("p90_sample_age"), "p90_sample_age"),
+                True,
+            ),
+            (
+                "replay_pressure",
+                "turnover_fraction",
+                _optional_float(
+                    derived.get("turnover_fraction"), "turnover_fraction"
+                ),
+                iteration >= 151,
+            ),
+        )
+        for stage, metric, value, eligibility in training_values:
+            observable = eligibility and value is not None
+            append_row(
+                evidence_stage=stage,
+                metric=metric,
+                analysis_grain="training_iteration",
+                iteration=iteration,
+                checkpoint=None,
+                gpu_hours=gpu_hours,
+                value=value,
+                observable=observable,
+            )
+
+    for iteration in sorted(replay_by_iteration):
+        if iteration < 61 or iteration > 210:
+            continue
+        replay = replay_by_iteration[iteration]
+        if iteration not in raw_by_iteration:
+            raise H1InputError(
+                f"replay diagnostic iteration {iteration} is absent from training metrics"
+            )
+        gpu_hours = _optional_float(
+            raw_by_iteration[iteration].get("cumulative_gpu_hours"),
+            "cumulative_gpu_hours",
+        )
+        snapshot_values = (
+            (
+                "incoming_unique_state_ratio",
+                _optional_float(
+                    replay.get("incoming_unique_state_ratio"),
+                    "incoming_unique_state_ratio",
+                ),
+                not _as_bool(
+                    replay.get("incoming_ratio_left_censored"),
+                    "incoming_ratio_left_censored",
+                ),
+            ),
+            (
+                "duplicate_rate",
+                _optional_float(replay.get("duplicate_rate"), "duplicate_rate"),
+                True,
+            ),
+            (
+                "state_effective_ratio",
+                _ratio_value(replay, "state_effective_count", "states"),
+                True,
+            ),
+        )
+        for metric, value, eligibility in snapshot_values:
+            observable = eligibility and value is not None
+            append_row(
+                evidence_stage="snapshot_diversity",
+                metric=metric,
+                analysis_grain="replay_iteration",
+                iteration=iteration,
+                checkpoint=None,
+                gpu_hours=gpu_hours,
+                value=value,
+                observable=observable,
+            )
+
+    for checkpoint in sorted(holdout_by_checkpoint):
+        holdout = holdout_by_checkpoint[checkpoint]
+        policy_gap = _optional_float(
+            holdout.get("approx_policy_gap"), "approx_policy_gap"
+        )
+        value_gap = _optional_float(
+            holdout.get("approx_value_gap"), "approx_value_gap"
+        )
+        gap_values = (
+            ("approx_policy_gap", policy_gap),
+            ("approx_value_gap", value_gap),
+            (
+                "approx_total_gap",
+                None
+                if policy_gap is None or value_gap is None
+                else policy_gap + value_gap,
+            ),
+        )
+        holdout_gpu_hours = _optional_float(holdout.get("gpu_hours"), "gpu_hours")
+        for metric, value in gap_values:
+            append_row(
+                evidence_stage="generalisation",
+                metric=metric,
+                analysis_grain="evaluation_checkpoint",
+                iteration=None,
+                checkpoint=checkpoint,
+                gpu_hours=holdout_gpu_hours,
+                value=value,
+                observable=checkpoint != 0 and value is not None,
+            )
+
+        fixed = fixed_by_checkpoint[checkpoint]
+        fixed_values = _fixed_basket_values(fixed)
+        append_row(
+            evidence_stage="playing_strength",
+            metric="fixed_basket_macro_score",
+            analysis_grain="evaluation_checkpoint",
+            iteration=None,
+            checkpoint=checkpoint,
+            gpu_hours=_optional_float(fixed.get("gpu_hours"), "gpu_hours"),
+            value=fixed_values["fixed_basket_macro_score"],
+            observable=True,
+        )
+
+    usable_counts: dict[str, int] = {}
+    for row in rows:
+        if (
+            row["metric"] in effect_metrics
+            and row["observable"] is True
+            and row["is_at_or_before_plateau"] is True
+        ):
+            metric = str(row["metric"])
+            usable_counts[metric] = usable_counts.get(metric, 0) + 1
+    for row in rows:
+        row["used_in_h1_trend"] = (
+            plateau_detected
+            and row["metric"] in effect_metrics
+            and row["observable"] is True
+            and row["is_at_or_before_plateau"] is True
+            and usable_counts.get(str(row["metric"]), 0) >= minimum_points
+        )
+
+    keys = [
+        (row["metric"], row["analysis_grain"], row["iteration"], row["checkpoint"])
+        for row in rows
+    ]
+    if len(keys) != len(set(keys)):
+        raise H1InputError("diagnostic time-series key is not unique")
+    return rows
 
 
 def select_pre_plateau_range(
@@ -1828,6 +2100,7 @@ def _output_paths(
         "resolved_protocol",
         "input_manifest",
         "aligned_checkpoint_metrics",
+        "diagnostic_time_series",
         "h1_effects",
         "h1_decision",
         "h1_summary",
@@ -1924,6 +2197,7 @@ def _write_failed_package(
         build_input_manifest(input_hashes, upstream),
     )
     _write_csv(output_paths["aligned_checkpoint_metrics"], [], ALIGNED_FIELDS)
+    _write_csv(output_paths["diagnostic_time_series"], [], DIAGNOSTIC_FIELDS)
     _write_csv(output_paths["h1_effects"], [], EFFECT_FIELDS)
     stages = _failed_stages(reason)
     decision = build_h1_decision(
@@ -2055,6 +2329,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         checkpoint_effect_rows = build_checkpoint_effect_rows(
             holdout_checkpoints, plateau
         )
+        diagnostic_rows = build_diagnostic_time_series(
+            raw_metrics,
+            derived_metrics,
+            replay_metrics,
+            holdout_checkpoints,
+            fixed_checkpoints,
+            plateau,
+            minimum_points=minimum_points,
+        )
         effects = build_effect_rows(
             training_iteration_effect_rows,
             replay_iteration_effect_rows,
@@ -2079,6 +2362,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         _write_csv(output_paths["aligned_checkpoint_metrics"], aligned, ALIGNED_FIELDS)
+        _write_csv(
+            output_paths["diagnostic_time_series"],
+            diagnostic_rows,
+            DIAGNOSTIC_FIELDS,
+        )
         _write_csv(output_paths["h1_effects"], effects, EFFECT_FIELDS)
         _write_json(output_paths["h1_decision"], decision)
         output_paths["h1_summary"].write_text(

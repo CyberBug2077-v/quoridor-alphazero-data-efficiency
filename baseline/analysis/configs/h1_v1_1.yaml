@@ -226,7 +226,7 @@ metrics:
   state_effective_ratio:
     source: replay_iteration_metrics
     analysis_grain: replay_iteration
-    source_column: state_effective_ratio
+    analysis_value: "state_effective_count / states"
     checkpoint_value: ratio_of_sums
     numerator: state_effective_count
     denominator: states
@@ -390,11 +390,35 @@ left_truncation:
   pre_observation_turnover_values: exclude_from_h1_trend
   extrapolation: none
 
+diagnostic_time_series:
+  structure: long_table
+  scope: full_run
+  primary_key:
+    - metric
+    - analysis_grain
+    - iteration
+    - checkpoint
+  fields:
+    - evidence_stage
+    - metric
+    - analysis_grain
+    - iteration
+    - checkpoint
+    - gpu_hours
+    - value
+    - observable
+    - used_in_h1_trend
+    - is_at_or_before_plateau
+    - is_after_plateau
+  used_in_h1_trend: observable_at_or_before_plateau_and_metric_has_at_least_minimum_valid_points
+  fixed_basket_score_is_context_not_h1_diagnostic_trend: true
+
 outputs:
   root: outputs/baseline_seed1001_4090_analysis/h1_v1_1
   resolved_protocol: outputs/baseline_seed1001_4090_analysis/h1_v1_1/protocol.resolved.yaml
   input_manifest: outputs/baseline_seed1001_4090_analysis/h1_v1_1/input_manifest.json
   aligned_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/h1_v1_1/aligned_checkpoint_metrics.csv
+  diagnostic_time_series: outputs/baseline_seed1001_4090_analysis/h1_v1_1/diagnostic_time_series.csv
   h1_effects: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_effects.csv
   h1_decision: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_decision.json
   h1_summary: outputs/baseline_seed1001_4090_analysis/h1_v1_1/h1_summary.md

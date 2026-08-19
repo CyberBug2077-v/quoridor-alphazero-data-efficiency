@@ -751,7 +751,8 @@ def test_early_plateau_has_no_snapshot_effect_points() -> None:
             "incoming_unique_state_ratio": 0.8,
             "incoming_ratio_left_censored": iteration == 61,
             "duplicate_rate": 0.2,
-            "state_effective_ratio": 0.8,
+            "state_effective_count": 80,
+            "states": 100,
         }
         for iteration in range(61, 81)
     ]
@@ -775,6 +776,104 @@ def test_early_plateau_has_no_snapshot_effect_points() -> None:
         assert effect["analysis_grain"] == "replay_iteration"
         assert effect["valid_points"] == 0
         assert effect["availability_status"] == "unavailable"
+
+
+def test_diagnostic_time_series_preserves_full_run_and_usage_flags() -> None:
+    raw_metrics = []
+    derived_metrics = []
+    for iteration in range(1, 81):
+        raw_metrics.append(
+            {
+                "iteration": iteration,
+                "positions_generated": 1000 - iteration,
+                "optimizer_steps": 10,
+                "replay_buffer_size": 10000 + iteration,
+                "samples_seen": 200,
+                "examples_used": 100,
+                "iteration_seconds": 60.0,
+                "cumulative_gpu_hours": iteration / 60.0,
+            }
+        )
+        derived_metrics.append(
+            {
+                "iteration": iteration,
+                "positions_generated": 1000 - iteration,
+                "mean_sample_age": iteration / 2.0,
+                "p90_sample_age": float(iteration),
+                "turnover_fraction": 0.0,
+            }
+        )
+    replay_metrics = [
+        {
+            "iteration": iteration,
+            "incoming_unique_state_ratio": 0.8,
+            "incoming_ratio_left_censored": iteration == 61,
+            "duplicate_rate": 0.2,
+            "state_effective_count": 80,
+            "states": 100,
+        }
+        for iteration in range(61, 81)
+    ]
+    checkpoints = [0, 20, 40, 60, 80]
+    holdout_rows = [
+        {
+            "checkpoint": checkpoint,
+            "gpu_hours": checkpoint / 20.0,
+            "approx_policy_gap": None if checkpoint == 0 else checkpoint / 100.0,
+            "approx_value_gap": None if checkpoint == 0 else checkpoint / 200.0,
+        }
+        for checkpoint in checkpoints
+    ]
+    fixed_rows = [
+        {
+            "checkpoint": checkpoint,
+            "gpu_hours": checkpoint / 20.0,
+            "score_rate": 0.5,
+            "score_rate_ci95_low": 0.45,
+            "score_rate_ci95_high": 0.55,
+            **{field: 0.5 for field in merge.FIXED_OPPONENT_SCORE_COLUMNS},
+        }
+        for checkpoint in checkpoints
+    ]
+    rows = merge.build_diagnostic_time_series(
+        raw_metrics,
+        derived_metrics,
+        replay_metrics,
+        holdout_rows,
+        fixed_rows,
+        {"plateau_detected": True, "plateau_start_checkpoint": 40},
+    )
+
+    assert len(rows) == 720
+    keys = {
+        (row["metric"], row["analysis_grain"], row["iteration"], row["checkpoint"])
+        for row in rows
+    }
+    assert len(keys) == len(rows)
+    assert sum(row["used_in_h1_trend"] is True for row in rows) == 240
+
+    def find(metric: str, *, iteration: int | None = None, checkpoint: int | None = None):
+        return next(
+            row
+            for row in rows
+            if row["metric"] == metric
+            and row["iteration"] == iteration
+            and row["checkpoint"] == checkpoint
+        )
+
+    assert find("fresh_states_per_update", iteration=40)["used_in_h1_trend"] is True
+    assert find("fresh_states_per_update", iteration=41)["is_after_plateau"] is True
+    assert find("fresh_states_per_update", iteration=41)["used_in_h1_trend"] is False
+    assert find("mean_sample_age", iteration=20)["observable"] is True
+    assert find("mean_sample_age", iteration=20)["used_in_h1_trend"] is True
+    assert find("selected_sample_reuse", iteration=20)["used_in_h1_trend"] is False
+    assert find("incoming_unique_state_ratio", iteration=61)["observable"] is False
+    assert find("duplicate_rate", iteration=61)["observable"] is True
+    assert find("duplicate_rate", iteration=61)["used_in_h1_trend"] is False
+    assert find("approx_policy_gap", checkpoint=0)["observable"] is False
+    assert find("approx_policy_gap", checkpoint=20)["used_in_h1_trend"] is False
+    assert find("fixed_basket_macro_score", checkpoint=20)["observable"] is True
+    assert find("fixed_basket_macro_score", checkpoint=20)["used_in_h1_trend"] is False
 
 
 def test_early_plateau_keeps_two_point_gap_unavailable() -> None:
@@ -880,6 +979,9 @@ def test_h1_v1_1_freezes_source_native_grains_and_observability() -> None:
         "unavailable": "fewer_than_minimum_valid_points",
     }
     assert config["effect_output"]["fields"] == list(merge.EFFECT_FIELDS)
+    assert config["diagnostic_time_series"]["fields"] == list(
+        merge.DIAGNOSTIC_FIELDS
+    )
     assert "minimum_valid_checkpoints" not in config["trend_analysis"]
 
     expected_grains = {
@@ -921,4 +1023,7 @@ def test_h1_v1_1_freezes_source_native_grains_and_observability() -> None:
     }
     assert config["outputs"]["root"] == (
         "outputs/baseline_seed1001_4090_analysis/h1_v1_1"
+    )
+    assert config["outputs"]["diagnostic_time_series"] == (
+        "outputs/baseline_seed1001_4090_analysis/h1_v1_1/diagnostic_time_series.csv"
     )
