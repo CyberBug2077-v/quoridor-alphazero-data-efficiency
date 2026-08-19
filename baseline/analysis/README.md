@@ -40,6 +40,14 @@ The formal hold-out therefore uses both sides of the shared checkpoint 0 under t
 | `analysis/configs/h1_v1.yaml` | The authoritative H1 merge grid, interval aggregation, trend directions, evidence-stage classification, missing-data handling, and output paths |
 | `analysis/configs/h1_v1_1.yaml` | The revised H1 protocol separating source-native trend grains from checkpoint-aligned presentation, with corrected observability and plateau confirmation semantics |
 
+### H1 v1.1 method revision
+
+`h1_v1` incorrectly applied checkpoint-level minimum-point requirements
+to native iteration-level diagnostics and extended replay-snapshot
+left truncation to training-log-derived replay proxies. `h1_v1.1` corrects
+these semantics without changing the plateau rule, expected directions,
+or source data.
+
 There is deliberately no fixed-basket protocol section in `baseline_gate2.yaml`.
 Fixed-basket protocol settings are read only from `fixed_basket_v1.yaml`; the
 `plateau` section in `baseline_gate2.yaml` remains authoritative for the plateau
