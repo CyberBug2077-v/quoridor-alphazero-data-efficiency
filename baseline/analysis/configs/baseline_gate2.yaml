@@ -123,15 +123,22 @@ fixed_basket:
   aggregate_formula: "macro_score = mean(opponent score), with equal opponent weight"
 
 holdout:
-  source: seeded_random_greedy_vs_random_greedy_games_generated_once_after_training
-  implementation: arena.bot_random_greedy.RandomGreedyBot
+  protocol_config: analysis/configs/holdout_v1.yaml
+  source: checkpoint_0_alphazero_mcts_self_play_generated_once_after_training
+  source_checkpoint_iteration: 0
+  policy_target: mcts_root_visit_distribution
+  sample_format: canonical_board_policy_value_valids_step_game_length
   excluded_from_training: true
   seed: 71001
   games: 200
   game_seed_formula: "seed + zero_based_game_index"
-  greedy_probability: 0.5
   max_game_length: 150
-  include_both_player_canonical_views: true
+  canonical_view: current_player_to_move
+  duplicate_non_acting_player_view: false
+  shared_between_baseline_and_adaptive: true
+  frozen_dataset_states: 9259
+  frozen_dataset_file_sha256: 1504cd503870f39b5e40d4ed1285bf392b22a75c375d00d23c7b669172fad863
+  frozen_dataset_content_sha256: 33d77cab4fd08bbad5b66c5ef7e9f359a1aacfbc078f440fe180385228879194
 
 plateau:
   metric: fixed_basket_macro_score
@@ -164,10 +171,16 @@ outputs:
   fixed_basket_games: outputs/baseline_reproduction_seed1001_4090/gate2/fixed_basket/games.jsonl
   fixed_basket_checkpoint_metrics: outputs/baseline_reproduction_seed1001_4090/gate2/fixed_basket/checkpoint_metrics.csv
   fixed_basket_summary: outputs/baseline_reproduction_seed1001_4090/gate2/fixed_basket/summary.json
-  holdout_games: outputs/baseline_reproduction_seed1001_4090/gate2/holdout/games.jsonl
-  holdout_states: outputs/baseline_reproduction_seed1001_4090/gate2/holdout/states.npz
-  holdout_checkpoint_metrics: outputs/baseline_reproduction_seed1001_4090/gate2/holdout/checkpoint_metrics.csv
-  holdout_summary: outputs/baseline_reproduction_seed1001_4090/gate2/holdout/summary.json
+  holdout_root: outputs/baseline_seed1001_4090_analysis/holdout_v1
+  holdout_protocol: outputs/baseline_seed1001_4090_analysis/holdout_v1/protocol.resolved.yaml
+  holdout_manifest: outputs/baseline_seed1001_4090_analysis/holdout_v1/manifest.json
+  holdout_games: outputs/baseline_seed1001_4090_analysis/holdout_v1/games.jsonl
+  holdout_shards: outputs/baseline_seed1001_4090_analysis/holdout_v1/shards
+  holdout_states: outputs/baseline_seed1001_4090_analysis/holdout_v1/states.npz
+  holdout_generation_log: outputs/baseline_seed1001_4090_analysis/holdout_v1/generation.log
+  holdout_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/holdout_v1/checkpoint_metrics.csv
+  holdout_trajectory_checkpoint_metrics: outputs/baseline_seed1001_4090_analysis/holdout_v1/trajectory_checkpoint_metrics.csv
+  holdout_summary: outputs/baseline_seed1001_4090_analysis/holdout_v1/summary.json
   plateau_result: outputs/baseline_reproduction_seed1001_4090/gate2/plateau.json
   plot_learning_curve_png: outputs/baseline_reproduction_seed1001_4090/gate2/plots/learning_curve.png
   plot_replay_dynamics_png: outputs/baseline_reproduction_seed1001_4090/gate2/plots/replay_dynamics.png

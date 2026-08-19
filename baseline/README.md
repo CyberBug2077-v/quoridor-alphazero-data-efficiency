@@ -30,11 +30,26 @@ extension experiments.
 
 ```text
 baseline/
-|-- analysis/              Offline metrics, replay, and fixed-basket evaluation
-|   |-- configs/           Frozen analysis and evaluation protocols
+|-- analysis/              Offline metrics, replay, fixed-basket, and hold-out evaluation
+|   |-- configs/
+|   |   |-- baseline_gate2.yaml
+|   |   |-- fixed_basket_v1.yaml
+|   |   `-- holdout_v1.yaml
 |   |-- js/                Seeded bridge for the JavaScript MCTS opponent
-|   |-- scripts/           Analysis and fixed-basket entry points
-|   |-- tests/             Analysis protocol and data-contract tests
+|   |-- scripts/
+|   |   |-- derive_baseline_metrics.py
+|   |   |-- summarize_replay.py
+|   |   |-- evaluate_fixed_basket.py
+|   |   |-- summarize_fixed_basket.py
+|   |   |-- generate_holdout.py
+|   |   |-- evaluate_holdout.py
+|   |   |-- verify_holdout.py
+|   |   `-- holdout_common.py
+|   |-- tests/
+|   |   |-- test_derive_baseline_metrics.py
+|   |   |-- test_summarize_replay.py
+|   |   |-- test_fixed_basket.py
+|   |   `-- test_holdout.py
 |   `-- README.md          Reproducible analysis operations manual
 |-- arena/                 Fixed opponents, adapters, Elo, and match utilities
 |-- configs/               Smoke-test and baseline configuration files
@@ -72,7 +87,8 @@ scripts. They are not authoritative experiment launchers.
 
 The post-run analysis workflow is documented separately in
 [`analysis/README.md`](analysis/README.md). Its fixed-basket evaluation is kept
-separate from the existing random + greedy sanity evaluation.
+separate from the existing random + greedy sanity evaluation, and the frozen
+MCTS policy/value hold-out is never admitted to training replay.
 
 ## Formal reproduction entry points
 

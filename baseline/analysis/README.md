@@ -12,13 +12,20 @@ Use the same Python environment as the baseline reproduction. The JavaScript heu
 
 ## What the analysis covers
 
-The current workflow has three parts:
+The current workflow has four parts:
 
 1. **Training-efficiency and replay-derived metrics.** Derive generation efficiency, GPU-time fractions, replay inflow and consumption, sample exposure, eviction, turnover, and sample-age metrics from the per-iteration training log.
 2. **Final replay snapshot analysis.** Analyse the 150-iteration rolling window saved at iteration 210, including canonical-state diversity, duplicate rate, state-effective count, per-iteration game counts and length distributions, and game boundaries recovered from `step` resets.
 3. **Fixed-basket evaluation.** Evaluate selected checkpoints against the same four opponents under fixed seeds, side assignments, MCTS settings, temperature schedule, and 150-turn limit. Produce per-game records, checkpoint summaries, opponent-stratified summaries, and provisional Elo ratings.
+4. **Frozen policy/value hold-out.** Generate 200 independent checkpoint-0 MCTS self-play games once, preserve complete `(canonical_board, policy_target, value_target, valid_moves, step, game_length)` samples, verify their integrity, and evaluate every registered checkpoint without placing any hold-out state in replay.
 
-This directory does **not currently generate** the hold-out evaluation, plateau decision, or publication figures. The corresponding paths in `baseline_gate2.yaml` are reserved for later work and do not mean that those analyses have been run.
+The workflow does not make the plateau decision or publication figures automatically. The corresponding registered paths in `baseline_gate2.yaml` define provenance and intended downstream use; their presence does not mean that an analysis has been run.
+
+### Hold-out design correction
+
+Random-greedy games do not contain the MCTS policy targets used by AlphaZero training. Treating their selected actions as one-hot labels would define a different policy loss, so it cannot support a rigorous train–hold-out policy-loss gap. Random-greedy data may still be used for position coverage or out-of-distribution value tests, while the 2,400 fixed-basket games remain exclusively a playing-strength evaluation.
+
+The formal hold-out therefore uses both sides of the shared checkpoint 0 under the baseline MCTS self-play protocol. It records the root visit distribution `pi`, value outcome `z`, and valid-action mask for every state. Baseline and Adaptive must read the exact same frozen dataset. A canonical view means the view of the player whose turn it is: white-to-move states use the white view and black-to-move states use the black view. A state is not duplicated from the non-acting player's view because that view has no corresponding policy target.
 
 ## Authoritative configurations
 
@@ -26,6 +33,7 @@ This directory does **not currently generate** the hold-out evaluation, plateau 
 |---|---|
 | `analysis/configs/baseline_gate2.yaml` | Baseline run ID, replay and state-hash definitions, derived-metric definitions, input provenance, and registered analysis output paths |
 | `analysis/configs/fixed_basket_v1.yaml` | The authoritative fixed-basket protocol: checkpoints, opponents, game counts, side schedule, MCTS settings, temperature schedule, and seed |
+| `analysis/configs/holdout_v1.yaml` | The authoritative frozen hold-out protocol: checkpoint-0 source hash, model, self-play, storage, evaluation checkpoints, and trajectory-bootstrap settings |
 
 The fixed-basket scripts do not read the `fixed_basket` section in `baseline_gate2.yaml`. If the two files disagree about fixed-basket settings, `fixed_basket_v1.yaml` is authoritative.
 
@@ -53,6 +61,9 @@ outputs/baseline_reproduction_seed1001_4090/
 | `checkpoints/latest.examples` | Rolling replay snapshot saved at iteration 210 | `summarize_replay.py` |
 | Initial checkpoint | Pretrained or initial checkpoint path recorded in `run_metadata.json` | Checkpoint 0 in `evaluate_fixed_basket.py` |
 | Checkpoints 20–210 | Checkpoint manifest and checkpoint directory in the baseline run | `evaluate_fixed_basket.py` |
+| Frozen checkpoint 0 | `outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar`, pinned by SHA-256 in `holdout_v1.yaml` | `generate_holdout.py` |
+| Per-game hold-out shards and `states.npz` | Generated once from checkpoint 0, never admitted to replay | `verify_holdout.py`, `evaluate_holdout.py` |
+| Baseline `metrics.jsonl` | Same-iteration replay-sampled training losses and cumulative GPU hours | `evaluate_holdout.py` gap columns |
 
 Before playing games, the evaluator resolves every checkpoint path and records its SHA-256 in the evaluation manifest. Checkpoint 0 is not assumed to live in the baseline checkpoint directory; its path comes from `run_metadata.json`.
 
@@ -62,8 +73,10 @@ The scripts do not modify `metrics.jsonl`, `resolved_config.yaml`, `run_metadata
 
 - By default, `derive_baseline_metrics.py` creates or atomically updates its three derived artifacts under the source run's new `gate2/` subdirectory. It does not overwrite a training artifact.
 - Replay and fixed-basket outputs are written under the separate `outputs/baseline_seed1001_4090_analysis/` root.
-- The evaluator appends and flushes one record to the analysis `games.jsonl` immediately after each completed game.
-- `--resume` reads the existing game records and skips completed stable game keys, so an interrupted run does not duplicate games.
+- Hold-out generation writes only under `outputs/baseline_seed1001_4090_analysis/holdout_v1/`. Neither `Coach.learn()` nor a training entry point imports or reads the hold-out scripts or artifacts.
+- `verify_holdout.py` is read-only. `evaluate_holdout.py` reads frozen states and checkpoints, then atomically writes only its metrics CSV files and summary.
+- The fixed-basket evaluator appends and flushes one record to its analysis `games.jsonl` immediately after each completed game.
+- Fixed-basket `--resume` reads the existing game records and skips completed stable game keys, so an interrupted run does not duplicate games. Hold-out resume uses the separate shard-first contract described below.
 - `--verify-source-integrity` compares the source-run file inventory before and after evaluation. Any change fails the evaluation.
 - The existing random + greedy sanity evaluation is outside this protocol and is not overwritten.
 
@@ -255,6 +268,82 @@ Formal acceptance requires:
 - 95% confidence intervals calculated by bootstrap stratified by opponent and model colour; and
 - Elo marked `provisional` with a fixed random seed. After Adaptive evaluation, Baseline checkpoints, Adaptive checkpoints, and fixed opponents must be fitted together in one final Elo model.
 
+## 5. Generate, freeze, verify, and evaluate the formal hold-out
+
+The fixed protocol is `analysis/configs/holdout_v1.yaml`. It uses seed 71001, 200 games, checkpoint 0 with its registered SHA-256, 200 MCTS simulations, inference batch 10, `cpuct` 1.25, root Dirichlet noise with alpha 0.15 and epsilon 0.25, and a 150-turn limit. Its `temperature_threshold: 15` follows `Coach.executeEpisode()` exactly: `temp = int(step < 15)`.
+
+Run the four-game pilot before formal generation:
+
+```powershell
+python analysis/scripts/generate_holdout.py `
+  --config analysis/configs/holdout_v1.yaml `
+  --output-dir outputs/baseline_seed1001_4090_analysis/holdout_v1_pilot `
+  --games 4 `
+  --verify-source-integrity
+
+python analysis/scripts/verify_holdout.py `
+  --config analysis/configs/holdout_v1.yaml `
+  --output-dir outputs/baseline_seed1001_4090_analysis/holdout_v1_pilot
+```
+
+`--games` is a bounded pilot-only runtime override recorded in `protocol.resolved.yaml` and `manifest.json`; it does not alter the frozen `games: 200` protocol. Resume the pilot with the identical arguments plus `--resume`. A completed resume must report that all artifacts match and must leave `games.jsonl`, the shard set, and `states.npz` unchanged.
+
+Start generation:
+
+```powershell
+python analysis/scripts/generate_holdout.py --device cuda
+```
+
+If generation is interrupted, resume it without duplicating completed games:
+
+```powershell
+python analysis/scripts/generate_holdout.py --device cuda --resume
+```
+
+Every game receives seed `71001 + game_id`. Before that game, Python, NumPy, Torch CPU, and all Torch CUDA RNGs are seeded. A new empty MCTS is constructed for every game. The generator first atomically commits `shards/game_XXXX.npz`, hashes that shard, and only then appends and synchronises its `games.jsonl` record. Resume validates `game_id`, seed, shard path, shard hash, and state count before skipping a completed game. Once all games are present, the shards are concatenated in `game_id` order into `states.npz`.
+
+Verify the frozen dataset before evaluation or transfer:
+
+```powershell
+python analysis/scripts/verify_holdout.py `
+  --config analysis/configs/holdout_v1.yaml `
+  --dataset outputs/baseline_seed1001_4090_analysis/holdout_v1/states.npz
+```
+
+The manifest records both the SHA-256 of the compressed NPZ file and a logical content SHA-256 over the ordered array name, dtype, shape, and contiguous bytes. After a formal manifest reaches `status: completed`, do not regenerate it, manually delete states, select samples based on loss, or add any hold-out sample to Baseline or Adaptive replay. Adaptive consumes the read-only dataset contract in `../extension/configs/adaptive_holdout_v1.yaml`.
+
+Run all registered baseline checkpoints:
+
+```powershell
+python analysis/scripts/evaluate_holdout.py --device cuda
+```
+
+The evaluator resolves checkpoint 0 from `run_metadata.json` and checkpoints 20–210 from the existing manifest/directory discovery logic, then records every checkpoint SHA-256. It uses the exact training policy-loss definition: request logits, apply the saved valid-action mask, softmax, and compute cross entropy against the MCTS root target. Value loss is mean squared error. Confidence intervals resample complete game trajectories and aggregate their state-level losses. For checkpoints 20–210, gap columns are hold-out loss minus the same-iteration replay-sampled training loss; checkpoint 0 has no training loss and its gap cells are intentionally blank.
+
+To evaluate Adaptive later, point `--run-dir` and `--training-metrics` at its run while retaining the same baseline `--holdout-dir`. Use a separate `--output-dir` so the Baseline metrics are not overwritten.
+
+Outputs:
+
+```text
+outputs/baseline_seed1001_4090_analysis/holdout_v1/
+|-- protocol.resolved.yaml
+|-- manifest.json
+|-- games.jsonl
+|-- shards/
+|   |-- game_0000.npz
+|   |-- ...
+|   `-- game_0199.npz
+|-- states.npz
+|-- generation.log
+|-- checkpoint_metrics.csv
+|-- trajectory_checkpoint_metrics.csv
+`-- summary.json
+```
+
+Each NPZ stores `boards [N,4,17,17] uint8`, `policies [N,action_size] float32`, `values [N] float32`, `valids [N,action_size] uint8`, `game_ids [N] int32`, `steps [N] int16`, and `game_lengths [N] int16`. The scripts always obtain `action_size` from `game.getActionSize()` and validate it dynamically. The present 9x9 implementation returns 136; the protocol does not hard-code the previously estimated value 209.
+
+Generation is accepted only when `manifest.json.status == "completed"`, `games.jsonl` contains exactly 200 unique game IDs and deterministic seeds, all 200 shard hashes match, and `states.npz` is the exact ordered concatenation. Verification must exit zero and print `Output status: passed`. It also requires finite normalised policies supported only on legal moves, value labels in `{-1,0,1}` with the correct acting-player sign, sequential steps, consistent game lengths, and exact dtypes and shapes. Evaluation is accepted when `summary.json.status == "completed"`, all 12 checkpoints have finite losses and trajectory-bootstrap intervals, `checkpoint_metrics.csv` has 12 rows, and `trajectory_checkpoint_metrics.csv` has one row for each checkpoint-game pair.
+
 ## Tests
 
 After changing analysis code, run:
@@ -279,6 +368,9 @@ The repository does not currently assign final dissertation figure numbers. Duri
 | Baseline checkpoint learning curve | `fixed_basket_v1/checkpoint_summary.csv` | Fixed-basket score rate and stratified bootstrap confidence intervals |
 | Per-opponent comparison | `fixed_basket_v1/opponent_summary.csv` | Checkpoint-by-opponent performance and side balance |
 | Elo appendix or diagnostic figure | `fixed_basket_v1/elo_summary.csv` | Provisional baseline-only Elo; the final dissertation Elo must use the joint fit |
+| Policy/value generalisation curve | `holdout_v1/checkpoint_metrics.csv` | Frozen checkpoint-0 self-play hold-out losses, train–hold-out gaps, and game-cluster bootstrap intervals |
+| Hold-out trajectory sensitivity | `holdout_v1/trajectory_checkpoint_metrics.csv` | Checkpoint-by-game loss distributions without treating within-game states as independent trajectories |
+| Hold-out provenance and integrity | `holdout_v1/protocol.resolved.yaml`, `holdout_v1/manifest.json`, `holdout_v1/summary.json` | Dataset source hash, exact self-play protocol, state schema, checkpoint hashes, and evaluation definitions |
 | Methods and reproducibility appendix | `evaluation_manifest.json`, `protocol.resolved.yaml` | Seeds, checkpoint provenance, protocol, source-integrity status, and data-quality notes |
 | Per-game audit | `fixed_basket_v1/games.jsonl` | Trace abnormal termination, turn-limit games, colours, and game seeds; not a main result table |
 

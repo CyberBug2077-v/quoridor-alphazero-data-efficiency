@@ -1,0 +1,14 @@
+schema_version: 1
+contract_id: adaptive_shared_holdout_v1
+
+holdout:
+  protocol_id: fixed_holdout_v1
+  dataset_path: ../baseline/outputs/baseline_seed1001_4090_analysis/holdout_v1/states.npz
+  manifest_path: ../baseline/outputs/baseline_seed1001_4090_analysis/holdout_v1/manifest.json
+  expected_games: 200
+  expected_states: 9259
+  expected_content_sha256: 33d77cab4fd08bbad5b66c5ef7e9f359a1aacfbc078f440fe180385228879194
+  expected_file_sha256: 1504cd503870f39b5e40d4ed1285bf392b22a75c375d00d23c7b669172fad863
+  read_only: true
+  excluded_from_replay: true
+
