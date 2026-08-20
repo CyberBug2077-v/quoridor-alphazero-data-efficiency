@@ -1,10 +1,10 @@
 schema_version: 1
-config_id: adaptive_formal_v1
+config_id: adaptive_preflight_seed1001
 status: frozen
 
 revision:
   supersedes: null
-  reason: scheduler_frozen_with_production_preflight_launch_gate
+  reason: five_iteration_production_preflight_for_frozen_scheduler
 
 provenance:
   baseline_config: ../baseline/configs/baseline_reproduction.yaml
@@ -13,17 +13,17 @@ provenance:
   require_clean_worktree: true
 
 outputs:
-  root: outputs/adaptive_formal_seed1001_4090
-  resolved_protocol: outputs/adaptive_formal_seed1001_4090/resolved_config.yaml
-  input_manifest: outputs/adaptive_formal_seed1001_4090/input_manifest.json
-  run_log: outputs/adaptive_formal_seed1001_4090/run.log
-  run_metadata: outputs/adaptive_formal_seed1001_4090/run_metadata.json
-  metrics: outputs/adaptive_formal_seed1001_4090/metrics.jsonl
-  summary: outputs/adaptive_formal_seed1001_4090/summary.json
-  checkpoint_manifest: outputs/adaptive_formal_seed1001_4090/checkpoint_manifest.json
-  checkpoints: outputs/adaptive_formal_seed1001_4090/checkpoints
-  scheduler_state: outputs/adaptive_formal_seed1001_4090/scheduler_state
-  evaluations: outputs/adaptive_formal_seed1001_4090/evaluations
+  root: outputs/adaptive_short
+  resolved_protocol: outputs/adaptive_short/resolved_config.yaml
+  input_manifest: outputs/adaptive_short/input_manifest.json
+  run_log: outputs/adaptive_short/run.log
+  run_metadata: outputs/adaptive_short/run_metadata.json
+  metrics: outputs/adaptive_short/metrics.jsonl
+  summary: outputs/adaptive_short/summary.json
+  checkpoint_manifest: outputs/adaptive_short/checkpoint_manifest.json
+  checkpoints: outputs/adaptive_short/checkpoints
+  scheduler_state: outputs/adaptive_short/scheduler_state
+  evaluations: outputs/adaptive_short/evaluations
 
 immutability:
   runnable_status: frozen
@@ -44,50 +44,28 @@ input_integrity:
   required_for:
     - matched_compute_contract
     - accepted_pilot_config
-    - production_preflight_summary
     - pretrained_checkpoint
     - shared_holdout_contract
     - protocol_configs
     - resolved_configs
 
-freeze_gate:
-  current_state: production_preflight_required
-  decision:
-    original_pilot:
-      planned_duration_hours: [4, 8]
-      status_before_formal_start: not_completed
-      required_before_formal_start: false
-    replacement_launch_gate: five_iteration_production_preflight
-    scheduler_parameters: frozen_before_production_preflight
-  production_preflight:
-    config_path: configs/adaptive_preflight_seed1001.yaml
-    summary_path: outputs/adaptive_short/summary.json
-    required_status: completed
-    required_config_id: adaptive_preflight_seed1001
-    required_run_id: adaptive_preflight_seed1001
-    required_iterations: 5
-  accepted_pilot_config:
-    path: configs/adaptive_pilot_v1.yaml
-    sha256: 5d49e46e5072d50486c64609bb8e12d03909aa21ed0a7d97e00af922f9c9dc06
-  pilot_gate_summary:
-    path: outputs/adaptive_pilot_seed2001_4090/pilot_gate_summary.json
-    sha256: null
-    required_status: passed
+production_preflight:
+  role: formal_launch_gate_replacement
+  required_iterations: 5
+  formal_config: configs/adaptive_formal_v1.yaml
+  original_pilot:
+    planned_duration_hours: [4, 8]
+    status_before_formal_start: not_completed
     required_before_formal_start: false
-  launch_requirements:
-    - production_preflight_summary_exists_and_is_completed
-    - production_preflight_completed_exactly_5_iterations
-    - scheduler_parameters_are_frozen
-    - worktree_is_clean
-  failure_policy: do_not_start_formal_until_production_preflight_passes
+  scheduler_parameters: frozen_before_run
 
 run:
-  id: adaptive_formal_seed1001_4090
+  id: adaptive_preflight_seed1001
   seed: 1001
   device: cuda
   gpu_index: 0
   deterministic: false
-  output_dir: outputs/adaptive_formal_seed1001_4090
+  output_dir: outputs/adaptive_short
   require_clean_worktree: true
 
 inputs:
@@ -171,8 +149,8 @@ adaptive_scheduler:
       - scheduler_rng_state
 
 budget:
-  max_gpu_hours: 24
-  max_iterations: 300
+  max_gpu_hours: 1
+  max_iterations: 5
   max_wall_clock_hours: 30
   allocated_gpu_count: 1
   gpu_hour_formula: sum(iteration_seconds * allocated_gpu_count) / 3600
@@ -193,7 +171,7 @@ budget:
     equivalence_requirement: same_scheduler_decisions_replay_state_and_rng_stream_as_uninterrupted_execution
 
 checkpoint:
-  directory: outputs/adaptive_formal_seed1001_4090/checkpoints
+  directory: outputs/adaptive_short/checkpoints
   save_every_iterations: 10
   save_replay_state: true
   save_scheduler_state: true

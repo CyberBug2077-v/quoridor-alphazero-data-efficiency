@@ -10,6 +10,7 @@ import pytest
 import torch
 import yaml
 
+from experiments.Adaptive import experiment_runtime
 from experiments.Adaptive.experiment_runtime import (
     BaselineRuntime,
     ExperimentRuntimeError,
@@ -58,11 +59,45 @@ def test_real_pilot_protocol_resolves_without_writing_outputs() -> None:
     assert not (run_dir / "resolved_config.yaml").exists()
 
 
-def test_formal_protocol_is_rejected_while_awaiting_pilot_gate(tmp_path: Path) -> None:
-    config_path = SOURCE_ROOT / "experiments" / "configs" / "adaptive_formal_v1.yaml"
+def test_real_preflight_protocol_resolves_as_frozen_five_iteration_run() -> None:
+    config_path = (
+        SOURCE_ROOT
+        / "experiments"
+        / "configs"
+        / "adaptive_preflight_seed1001.yaml"
+    )
+    run_dir = SOURCE_ROOT / "experiments" / "outputs" / "adaptive_short"
 
-    with pytest.raises(ExperimentRuntimeError, match="status must be frozen"):
-        resolve_adaptive_protocol(config_path, tmp_path / "formal")
+    result = run_experiment(RuntimeRequest("dry-run", config_path, run_dir))
+
+    assert result["resolved_config"]["config_id"] == "adaptive_preflight_seed1001"
+    assert result["resolved_config"]["status"] == "frozen"
+    assert result["resolved_config"]["budget"]["max_iterations"] == 5
+    assert result["resolved_config"]["adaptive_scheduler"]["target_states"] == 2516
+
+
+def test_formal_protocol_records_production_preflight_launch_policy() -> None:
+    config_path = SOURCE_ROOT / "experiments" / "configs" / "adaptive_formal_v1.yaml"
+    protocol = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    assert protocol["status"] == "frozen"
+    assert protocol["freeze_gate"]["current_state"] == "production_preflight_required"
+    assert protocol["freeze_gate"]["decision"] == {
+        "original_pilot": {
+            "planned_duration_hours": [4, 8],
+            "status_before_formal_start": "not_completed",
+            "required_before_formal_start": False,
+        },
+        "replacement_launch_gate": "five_iteration_production_preflight",
+        "scheduler_parameters": "frozen_before_production_preflight",
+    }
+    assert protocol["freeze_gate"]["production_preflight"][
+        "required_iterations"
+    ] == 5
+    assert protocol["freeze_gate"]["pilot_gate_summary"][
+        "required_before_formal_start"
+    ] is False
+    assert "experiment_code_commit" not in protocol["run"]
 
 
 class FakeOptimizer:
@@ -394,6 +429,54 @@ def make_protocol(tmp_path: Path) -> tuple[Path, Path]:
     return config_path, run_dir
 
 
+def test_formal_gate_requires_exactly_five_completed_preflight_iterations(
+    tmp_path: Path,
+) -> None:
+    config_path, run_dir = make_protocol(tmp_path)
+    protocol = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    baseline_path = Path(protocol["provenance"]["baseline_config"])
+    preflight_summary = tmp_path / "preflight_summary.json"
+    summary = {
+        "status": "completed",
+        "config_id": "adaptive_preflight_seed1001",
+        "run_id": "adaptive_preflight_seed1001",
+        "completed_iterations": [1, 2, 3, 4, 5],
+        "final_iteration": 5,
+    }
+    preflight_summary.write_text(json.dumps(summary), encoding="utf-8")
+    protocol["config_id"] = "adaptive_formal_test_v1"
+    protocol["freeze_gate"] = {
+        "current_state": "production_preflight_required",
+        "production_preflight": {
+            "summary_path": preflight_summary.as_posix(),
+            "required_status": "completed",
+            "required_config_id": "adaptive_preflight_seed1001",
+            "required_run_id": "adaptive_preflight_seed1001",
+            "required_iterations": 5,
+        },
+    }
+    input_reference = {
+        "path": baseline_path.as_posix(),
+        "sha256": sha256(baseline_path),
+    }
+    protocol["inputs"] = {
+        "accepted_pilot_config": input_reference,
+        "shared_holdout_contract": input_reference,
+    }
+    write_yaml(config_path, protocol)
+
+    resolution = resolve_adaptive_protocol(config_path, run_dir)
+    assert resolution.input_manifest["inputs"]["production_preflight_summary"][
+        "sha256"
+    ] == sha256(preflight_summary)
+
+    summary["completed_iterations"] = [1, 2, 3, 4]
+    summary["final_iteration"] = 4
+    preflight_summary.write_text(json.dumps(summary), encoding="utf-8")
+    with pytest.raises(ExperimentRuntimeError, match="exactly 5 iterations"):
+        resolve_adaptive_protocol(config_path, run_dir)
+
+
 def runtime_factory(
     created: list[BaselineRuntime],
     *,
@@ -428,6 +511,20 @@ def test_fresh_interruption_and_resume_use_last_complete_commit(tmp_path: Path) 
         for line in (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert [record["iteration"] for record in first_metrics] == [1]
+    assert first_metrics[0]["checkpoint_path"] is None
+    assert first_metrics[0]["checkpoint_sha256"] is None
+    resolved = yaml.safe_load(
+        (run_dir / "resolved_config.yaml").read_text(encoding="utf-8")
+    )
+    input_manifest = json.loads(
+        (run_dir / "input_manifest.json").read_text(encoding="utf-8")
+    )
+    run_metadata = json.loads(
+        (run_dir / "run_metadata.json").read_text(encoding="utf-8")
+    )
+    assert resolved["git"] == input_manifest["git"] == run_metadata["git"]
+    assert resolved["run"]["experiment_code_commit"] == resolved["git"]["commit"]
+    assert resolved["git"]["commit"]
     latest = json.loads(
         (run_dir / "recovery" / "latest_commit.json").read_text(encoding="utf-8")
     )
@@ -484,6 +581,7 @@ def test_fresh_interruption_and_resume_use_last_complete_commit(tmp_path: Path) 
     assert result["status"] == "completed"
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["final_iteration"] == 2
+    assert summary["final_checkpoint"] == final_metrics[1]["checkpoint_path"]
 
 
 def test_resume_rejects_mismatched_recovery_artifact_hash(tmp_path: Path) -> None:
@@ -540,3 +638,91 @@ def test_fresh_refuses_nonempty_output_directory(tmp_path: Path) -> None:
             RuntimeRequest("fresh", config_path, run_dir),
             runtime_builder=lambda resolved: pytest.fail("builder should not run"),
         )
+
+
+def test_fresh_records_actual_head_without_yaml_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, run_dir = make_protocol(tmp_path)
+    protocol = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    protocol["budget"]["max_iterations"] = 1
+    assert "experiment_code_commit" not in protocol["run"]
+    write_yaml(config_path, protocol)
+    git = {"commit": "a" * 40, "branch": "test", "dirty": False}
+    monkeypatch.setattr(experiment_runtime, "_git_metadata", lambda root: git.copy())
+
+    run_experiment(
+        RuntimeRequest("fresh", config_path, run_dir),
+        runtime_builder=runtime_factory([], interrupt_after=None),
+    )
+
+    resolved = yaml.safe_load(
+        (run_dir / "resolved_config.yaml").read_text(encoding="utf-8")
+    )
+    manifest = json.loads(
+        (run_dir / "input_manifest.json").read_text(encoding="utf-8")
+    )
+    metadata = json.loads(
+        (run_dir / "run_metadata.json").read_text(encoding="utf-8")
+    )
+    assert resolved["run"]["experiment_code_commit"] == git["commit"]
+    assert resolved["git"] == manifest["git"] == metadata["git"] == git
+
+
+def test_fresh_rejects_dirty_worktree_when_protocol_requires_clean_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path, run_dir = make_protocol(tmp_path)
+    protocol = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    protocol["provenance"]["require_clean_worktree"] = False
+    protocol["run"]["require_clean_worktree"] = True
+    write_yaml(config_path, protocol)
+    monkeypatch.setattr(
+        experiment_runtime,
+        "_git_metadata",
+        lambda root: {"commit": "b" * 40, "branch": "test", "dirty": True},
+    )
+
+    with pytest.raises(ExperimentRuntimeError, match="requires a clean worktree"):
+        run_experiment(
+            RuntimeRequest("fresh", config_path, run_dir),
+            runtime_builder=lambda resolved: pytest.fail("builder should not run"),
+        )
+
+
+def test_evaluation_time_includes_runner_and_training_state_restore(
+    tmp_path: Path,
+) -> None:
+    config_path, run_dir = make_protocol(tmp_path)
+    protocol = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    protocol["budget"]["max_iterations"] = 1
+    protocol["evaluation"]["evaluate_every_iterations"] = 1
+    write_yaml(config_path, protocol)
+    created: list[BaselineRuntime] = []
+
+    def evaluation_runner(
+        resolved: dict,
+        runtime: BaselineRuntime,
+        checkpoint_path: Path,
+        output_path: Path,
+    ) -> float:
+        runtime.network.value = 999
+        runtime.network.optimizer.step = 999
+        output_path.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+        return 3600.0
+
+    result = run_experiment(
+        RuntimeRequest("fresh", config_path, run_dir),
+        runtime_builder=runtime_factory(created, interrupt_after=None),
+        evaluation_runner=evaluation_runner,
+    )
+
+    metric = json.loads(
+        (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert result["status"] == "completed"
+    assert 0.0 <= metric["evaluation_seconds"] < 3600.0
+    assert metric["checkpoint_seconds"] >= 0.0
+    assert metric["evaluation_training_state_preserved"] is True
+    assert created[-1].network.value == 1
+    assert created[-1].network.optimizer.step == 1

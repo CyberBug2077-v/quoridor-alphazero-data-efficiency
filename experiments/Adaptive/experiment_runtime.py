@@ -397,19 +397,17 @@ def _validate_protocol_status(protocol: dict[str, Any]) -> None:
         if is_formal:
             raise ExperimentRuntimeError(
                 "Formal Adaptive protocol is not runnable: status must be frozen "
-                "after the Pilot gate and experiment commit are recorded"
+                "before the production preflight is run"
             )
         raise ExperimentRuntimeError(
             f"Adaptive protocol {config_id} is not frozen: status={status!r}"
         )
     if is_formal:
         freeze_gate = _require_mapping(protocol, "freeze_gate", "protocol")
-        if freeze_gate.get("current_state") not in {"passed", "frozen"}:
-            raise ExperimentRuntimeError("Formal Pilot freeze gate has not passed")
-        run = _require_mapping(protocol, "run", "protocol")
-        commit = run.get("experiment_code_commit")
-        if not isinstance(commit, str) or not commit:
-            raise ExperimentRuntimeError("Formal experiment_code_commit is missing")
+        if freeze_gate.get("current_state") != "production_preflight_required":
+            raise ExperimentRuntimeError(
+                "Formal production preflight launch gate is not configured"
+            )
 
 
 def _normalise_evaluation(
@@ -448,32 +446,53 @@ def _verify_formal_gate(
     config_path: Path,
     experiments_root: Path,
     inputs: dict[str, Any],
-    source_root: Path,
 ) -> None:
     config_id = str(protocol["config_id"])
     if not config_id.startswith("adaptive_formal_"):
         return
-    gate = protocol["freeze_gate"]
-    gate_summary = gate.get("pilot_gate_summary", {})
+    gate = _require_mapping(protocol, "freeze_gate", "protocol")
+    preflight = _require_mapping(gate, "production_preflight", "freeze_gate")
     path = _resolve_reference(
-        gate_summary.get("path", ""),
+        preflight.get("summary_path", ""),
         config_path=config_path,
         experiments_root=experiments_root,
     )
-    inputs["pilot_gate_summary"] = _verified_input(
-        "pilot_gate_summary", path, gate_summary.get("sha256")
-    )
+    if not path.is_file():
+        raise ExperimentRuntimeError(f"production preflight summary not found: {path}")
+    inputs["production_preflight_summary"] = {
+        "path": path.as_posix(),
+        "sha256": sha256_file(path),
+    }
     summary = _read_json(path)
-    if summary.get("status") != gate_summary.get("required_status", "passed"):
-        raise ExperimentRuntimeError("Formal Pilot gate summary is not passed")
-    current_git = _git_metadata(source_root)
-    expected_commit = protocol["run"]["experiment_code_commit"]
-    if current_git["commit"] != expected_commit:
+    if summary.get("status") != preflight.get("required_status", "completed"):
         raise ExperimentRuntimeError(
-            "current experiment commit differs from Formal protocol"
+            "production preflight did not complete successfully"
         )
-    if protocol["run"].get("require_clean_worktree") and current_git["dirty"]:
-        raise ExperimentRuntimeError("Formal run requires a clean worktree")
+    required_config_id = preflight.get("required_config_id")
+    if summary.get("config_id") != required_config_id:
+        raise ExperimentRuntimeError(
+            "production preflight config ID differs from protocol"
+        )
+    required_run_id = preflight.get("required_run_id")
+    if summary.get("run_id") != required_run_id:
+        raise ExperimentRuntimeError("production preflight run ID differs from protocol")
+    required_iterations = preflight.get("required_iterations")
+    if (
+        isinstance(required_iterations, bool)
+        or not isinstance(required_iterations, int)
+        or required_iterations < 1
+    ):
+        raise ExperimentRuntimeError(
+            "production preflight required_iterations must be an integer >= 1"
+        )
+    completed_iterations = summary.get("completed_iterations")
+    if (
+        summary.get("final_iteration") != required_iterations
+        or completed_iterations != list(range(1, required_iterations + 1))
+    ):
+        raise ExperimentRuntimeError(
+            f"production preflight must contain exactly {required_iterations} iterations"
+        )
 
 
 def _verify_formal_inputs(
@@ -603,7 +622,6 @@ def resolve_adaptive_protocol(
     run_dir: Path | str,
     *,
     experiments_root: Path = EXPERIMENTS_ROOT,
-    source_root: Path = SOURCE_ROOT,
 ) -> ResolvedRuntime:
     config_path = Path(config_path).expanduser().resolve()
     run_dir = Path(run_dir).expanduser().resolve()
@@ -810,6 +828,7 @@ def resolve_adaptive_protocol(
         "protocol_requirements": {
             "require_clean_worktree": bool(
                 provenance.get("require_clean_worktree", False)
+                or adaptive_run.get("require_clean_worktree", False)
             ),
             "baseline_git_commit": provenance.get("baseline_git_commit"),
         },
@@ -843,7 +862,6 @@ def resolve_adaptive_protocol(
         config_path=config_path,
         experiments_root=experiments_root,
         inputs=inputs,
-        source_root=source_root,
     )
     _verify_formal_inputs(
         protocol,
@@ -1053,7 +1071,7 @@ def _write_initial_outputs(resolution: ResolvedRuntime) -> None:
         "run_id": resolution.config["run"]["id"],
         "config_id": resolution.config["config_id"],
         "mode": "fresh",
-        "git": _git_metadata(SOURCE_ROOT),
+        "git": copy.deepcopy(resolution.config["git"]),
         "input_manifest_sha256": sha256_file(run_dir / "input_manifest.json"),
         "starting_iteration": 1,
         "initial_replay_size": 0,
@@ -1088,13 +1106,12 @@ def _default_evaluation_runner(
     runtime: BaselineRuntime,
     checkpoint_path: Path,
     output_path: Path,
-) -> float:
+) -> None:
     baseline_scripts = BASELINE_ROOT / "scripts"
     if str(baseline_scripts) not in sys.path:
         sys.path.insert(0, str(baseline_scripts))
     from evaluate import evaluate_checkpoint
 
-    started = time.perf_counter()
     evaluate_checkpoint(
         resolved,
         runtime.game,
@@ -1102,10 +1119,6 @@ def _default_evaluation_runner(
         checkpoint=checkpoint_path,
         output_path=output_path,
     )
-    elapsed = time.perf_counter() - started
-    if not math.isfinite(elapsed) or elapsed < 0.0:
-        raise ExperimentRuntimeError("evaluation timer returned an invalid duration")
-    return elapsed
 
 
 def _required_metric_fields(resolved: dict[str, Any]) -> list[str]:
@@ -1216,7 +1229,7 @@ def commit_iteration(
     instrumentation_seconds: float,
     observer_seconds: float,
     evaluation_runner: Callable[
-        [dict[str, Any], BaselineRuntime, Path, Path], float
+        [dict[str, Any], BaselineRuntime, Path, Path], Any
     ]
     | None = None,
 ) -> tuple[dict[str, Any], Any]:
@@ -1272,14 +1285,13 @@ def commit_iteration(
             optimizer_state_before_evaluation = copy.deepcopy(
                 _capture_optimizer_state(runtime.network)
             )
+            evaluation_started = time.perf_counter()
             try:
-                evaluation_seconds = float(
-                    runner(
-                        resolution.config,
-                        runtime,
-                        pending_model,
-                        evaluation_output_path,
-                    )
+                runner(
+                    resolution.config,
+                    runtime,
+                    pending_model,
+                    evaluation_output_path,
                 )
             finally:
                 _load_network_checkpoint(runtime.network, pending_model)
@@ -1287,9 +1299,10 @@ def commit_iteration(
                     runtime.network, optimizer_state_before_evaluation
                 )
                 _restore_rng_state(training_rng_state)
+            evaluation_seconds = time.perf_counter() - evaluation_started
             if not math.isfinite(evaluation_seconds) or evaluation_seconds < 0.0:
                 raise ExperimentRuntimeError(
-                    "evaluation runner returned an invalid duration"
+                    "evaluation timer returned an invalid duration"
                 )
             if not evaluation_output_path.is_file():
                 raise ExperimentRuntimeError(
@@ -1410,8 +1423,8 @@ def commit_iteration(
                 ),
                 "cumulative_gpu_hours": resource_record.cumulative_gpu_hours,
                 "self_play_time_fraction": resource_record.self_play_time_fraction,
-                "checkpoint_path": final_model.as_posix(),
-                "checkpoint_sha256": model_sha,
+                "checkpoint_path": None,
+                "checkpoint_sha256": None,
                 "replay_state_sha256": replay_sha,
                 "runtime_state_sha256": runtime_state_sha,
                 "scheduler_state_sha256": scheduler_state_sha,
@@ -1427,21 +1440,6 @@ def commit_iteration(
                 ),
             }
         )
-        required_fields = _required_metric_fields(resolution.config)
-        missing_metrics = sorted(field for field in required_fields if field not in metric)
-        if missing_metrics:
-            raise ExperimentRuntimeError(
-                "metrics record is missing required field(s): "
-                + ", ".join(missing_metrics)
-            )
-        try:
-            json.dumps(_plain(metric), allow_nan=False)
-        except (TypeError, ValueError) as exc:
-            raise ExperimentRuntimeError(
-                f"metrics iteration {iteration} is not finite JSON"
-            ) from exc
-        _atomic_write_json(pending_dir / "metrics_record.json", metric)
-
         current_gpu_hours = resource_record.cumulative_gpu_hours
         crossed_milestones = [
             float(value)
@@ -1510,18 +1508,38 @@ def commit_iteration(
                 is_final=is_final,
                 milestones=current_milestones,
             )
+        archived_checkpoint_sha: str | None = None
+        if current_archive_path is not None:
+            archived_checkpoint_sha = sha256_file(current_archive_path)
+            metric["checkpoint_path"] = current_archive_path.as_posix()
+            metric["checkpoint_sha256"] = archived_checkpoint_sha
         if evaluation_output_path is not None:
             assert current_archive_path is not None
+            assert archived_checkpoint_sha is not None
             evaluation_record = _read_json(evaluation_output_path)
             evaluation_record.update(
                 {
                     "iteration": iteration,
                     "checkpoint_path": current_archive_path.as_posix(),
-                    "checkpoint_sha256": sha256_file(current_archive_path),
+                    "checkpoint_sha256": archived_checkpoint_sha,
                     "training_state_preserved": True,
                 }
             )
             _atomic_write_json(evaluation_output_path, evaluation_record)
+        required_fields = _required_metric_fields(resolution.config)
+        missing_metrics = sorted(field for field in required_fields if field not in metric)
+        if missing_metrics:
+            raise ExperimentRuntimeError(
+                "metrics record is missing required field(s): "
+                + ", ".join(missing_metrics)
+            )
+        try:
+            json.dumps(_plain(metric), allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ExperimentRuntimeError(
+                f"metrics iteration {iteration} is not finite JSON"
+            ) from exc
+        _atomic_write_json(pending_dir / "metrics_record.json", metric)
         checkpoint_manifest["last_committed_iteration"] = iteration
         pending_checkpoint_manifest = pending_dir / "checkpoint_manifest.json"
         _atomic_write_json(pending_checkpoint_manifest, checkpoint_manifest)
@@ -1788,7 +1806,7 @@ def _run_training(
     *,
     mode: str,
     evaluation_runner: Callable[
-        [dict[str, Any], BaselineRuntime, Path, Path], float
+        [dict[str, Any], BaselineRuntime, Path, Path], Any
     ]
     | None,
 ) -> dict[str, Any]:
@@ -1935,7 +1953,7 @@ def run_experiment(
     *,
     runtime_builder: Callable[[dict[str, Any]], BaselineRuntime] = build_baseline_runtime,
     evaluation_runner: Callable[
-        [dict[str, Any], BaselineRuntime, Path, Path], float
+        [dict[str, Any], BaselineRuntime, Path, Path], Any
     ]
     | None = None,
 ) -> dict[str, Any]:
@@ -1960,13 +1978,21 @@ def run_experiment(
             }
         _ensure_fresh_output(run_dir)
         git = _git_metadata(SOURCE_ROOT)
+        commit = git.get("commit")
+        if not isinstance(commit, str) or not commit:
+            raise ProtocolValidationError(
+                "fresh Adaptive run could not determine the current Git HEAD"
+            )
         if (
             resolution.config["protocol_requirements"]["require_clean_worktree"]
-            and git["dirty"]
+            and git.get("dirty") is not False
         ):
             raise ProtocolValidationError(
                 "fresh Adaptive run requires a clean worktree"
             )
+        resolution.config["run"]["experiment_code_commit"] = commit
+        resolution.config["git"] = copy.deepcopy(git)
+        resolution.input_manifest["git"] = copy.deepcopy(git)
         _initialise_device(resolution.config)
         _set_seed(
             int(resolution.config["run"]["seed"]),

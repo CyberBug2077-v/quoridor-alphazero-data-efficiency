@@ -43,6 +43,7 @@ baseline/data/
 # Generated experiment output
 baseline/outputs/
 extension/outputs/
+experiments/outputs/
 baseline/external/alphazero/temp/
 baseline/external/alphazero/training_runs/
 
