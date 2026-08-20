@@ -35,7 +35,7 @@ class ReplayInstrumentationConfig:
     history_iterations: int
     max_valid_game_length: int = 150
     state_hash_algorithm: str = "sha256"
-    schema_version: int = 1
+    schema_version: int = 2
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,8 @@ class IterationReplayStats:
     valid_game_lengths: tuple[int, ...]
     mean_valid_game_length: float | None
     realised_valid_states: int
+    truncated_games: int
+    truncated_positions: int
     excluded_game_count_by_reason: dict[str, int]
     anomaly_count_by_type: dict[str, int]
     positions_generated: int
@@ -72,6 +74,8 @@ class ReplayInstrumentationState:
     total_games_attempted: int
     total_games_completed: int
     total_valid_games: int
+    total_truncated_games: int
+    total_truncated_positions: int
     total_positions_generated: int
     cumulative_excluded_game_count_by_reason: dict[str, int]
     cumulative_anomaly_count_by_type: dict[str, int]
@@ -106,7 +110,7 @@ class ReplayTrajectoryStats:
     total_recovered_positions: int
 
 
-_EXCLUSION_REASONS = ("empty_game", "abnormal_game", "incomplete_game")
+_EXCLUSION_REASONS = ("empty_game", "malformed_game", "abnormal_length")
 _STATE_FIELDS = frozenset(
     {
         "schema_version",
@@ -114,6 +118,8 @@ _STATE_FIELDS = frozenset(
         "total_games_attempted",
         "total_games_completed",
         "total_valid_games",
+        "total_truncated_games",
+        "total_truncated_positions",
         "total_positions_generated",
         "cumulative_excluded_game_count_by_reason",
         "cumulative_anomaly_count_by_type",
@@ -135,6 +141,8 @@ class _ActiveIteration:
     games_completed: int = 0
     positions_generated: int = 0
     valid_game_lengths: list[int] = field(default_factory=list)
+    truncated_games: int = 0
+    truncated_positions: int = 0
     all_nonempty_game_lengths: list[int] = field(default_factory=list)
     excluded_game_count_by_reason: dict[str, int] = field(
         default_factory=lambda: {reason: 0 for reason in _EXCLUSION_REASONS}
@@ -186,17 +194,19 @@ def _validate_config(config: ReplayInstrumentationConfig) -> None:
         raise ValueError("max_valid_game_length must be an integer >= 1")
     if config.state_hash_algorithm != "sha256":
         raise ValueError("state_hash_algorithm must be 'sha256'")
-    if not _is_integer(config.schema_version) or config.schema_version != 1:
-        raise ValueError("ReplayInstrumentationConfig schema_version must be 1")
+    if not _is_integer(config.schema_version) or config.schema_version != 2:
+        raise ValueError("ReplayInstrumentationConfig schema_version must be 2")
 
 
 def _fresh_state() -> ReplayInstrumentationState:
     return ReplayInstrumentationState(
-        schema_version=1,
+        schema_version=2,
         completed_iteration=0,
         total_games_attempted=0,
         total_games_completed=0,
         total_valid_games=0,
+        total_truncated_games=0,
+        total_truncated_positions=0,
         total_positions_generated=0,
         cumulative_excluded_game_count_by_reason={
             reason: 0 for reason in _EXCLUSION_REASONS
@@ -212,6 +222,8 @@ def _copy_state(state: ReplayInstrumentationState) -> ReplayInstrumentationState
         total_games_attempted=int(state.total_games_attempted),
         total_games_completed=int(state.total_games_completed),
         total_valid_games=int(state.total_valid_games),
+        total_truncated_games=int(state.total_truncated_games),
+        total_truncated_positions=int(state.total_truncated_positions),
         total_positions_generated=int(state.total_positions_generated),
         cumulative_excluded_game_count_by_reason=dict(
             state.cumulative_excluded_game_count_by_reason
@@ -230,15 +242,17 @@ def _validate_state(
         raise ValueError("state must be a ReplayInstrumentationState")
     if (
         not _is_integer(state.schema_version)
-        or state.schema_version != 1
+        or state.schema_version != 2
         or state.schema_version != config.schema_version
     ):
-        raise ValueError("ReplayInstrumentationState schema_version must be 1")
+        raise ValueError("ReplayInstrumentationState schema_version must be 2")
     count_fields = (
         "completed_iteration",
         "total_games_attempted",
         "total_games_completed",
         "total_valid_games",
+        "total_truncated_games",
+        "total_truncated_positions",
         "total_positions_generated",
     )
     for field_name in count_fields:
@@ -263,6 +277,12 @@ def _validate_state(
     )
     if state.total_valid_games > state.total_games_completed:
         raise ValueError("total_valid_games cannot exceed total_games_completed")
+    if state.total_truncated_games > state.total_valid_games:
+        raise ValueError("total_truncated_games cannot exceed total_valid_games")
+    if state.total_truncated_positions > state.total_positions_generated:
+        raise ValueError(
+            "total_truncated_positions cannot exceed total_positions_generated"
+        )
     if state.total_games_completed > state.total_games_attempted:
         raise ValueError("total_games_completed cannot exceed total_games_attempted")
 
@@ -314,11 +334,12 @@ class ReplayInstrumentation:
         active.games_attempted += 1
 
         if not _episode_is_sequence(episode_examples):
-            return self._record_abnormal_episode(
+            return self._record_excluded_episode(
                 active,
                 game_length=None,
                 positions_generated=0,
                 anomaly_types={"malformed_sample"},
+                exclusion_reason="malformed_game",
             )
 
         episode_length = len(episode_examples)
@@ -332,7 +353,6 @@ class ReplayInstrumentation:
                 anomaly_types=(),
             )
 
-        active.games_completed += 1
         active.positions_generated += episode_length
         active.all_nonempty_game_lengths.append(episode_length)
 
@@ -390,24 +410,32 @@ class ReplayInstrumentation:
                 anomaly_types.add("mixed_terminal_values")
 
         if anomaly_types:
-            return self._record_abnormal_episode(
+            exclusion_reason = (
+                "abnormal_length"
+                if "game_length_exceeds_limit" in anomaly_types
+                else "malformed_game"
+            )
+            return self._record_excluded_episode(
                 active,
                 game_length=episode_length,
                 positions_generated=episode_length,
                 anomaly_types=anomaly_types,
+                exclusion_reason=exclusion_reason,
             )
 
+        active.games_completed += 1
+        active.valid_game_lengths.append(episode_length)
         if all(value == 0.0 for value in values):
-            active.excluded_game_count_by_reason["incomplete_game"] += 1
+            active.truncated_games += 1
+            active.truncated_positions += episode_length
             return EpisodeObservation(
-                classification="incomplete",
+                classification="truncated_game",
                 game_length=episode_length,
                 positions_generated=episode_length,
-                valid_for_scheduler=False,
+                valid_for_scheduler=True,
                 anomaly_types=(),
             )
 
-        active.valid_game_lengths.append(episode_length)
         return EpisodeObservation(
             classification="valid",
             game_length=episode_length,
@@ -429,7 +457,11 @@ class ReplayInstrumentation:
             )
 
         stats = self._build_iteration_stats(active)
-        self._validate_coach_metrics(stats, coach_metrics)
+        self._validate_coach_metrics(
+            stats,
+            coach_metrics,
+            active.all_nonempty_game_lengths,
+        )
 
         cumulative_excluded = dict(
             self.state.cumulative_excluded_game_count_by_reason
@@ -450,6 +482,12 @@ class ReplayInstrumentation:
                 self.state.total_games_completed + stats.games_completed
             ),
             total_valid_games=self.state.total_valid_games + stats.valid_game_count,
+            total_truncated_games=(
+                self.state.total_truncated_games + stats.truncated_games
+            ),
+            total_truncated_positions=(
+                self.state.total_truncated_positions + stats.truncated_positions
+            ),
             total_positions_generated=(
                 self.state.total_positions_generated + stats.positions_generated
             ),
@@ -499,6 +537,8 @@ class ReplayInstrumentation:
             total_games_attempted=state_dict["total_games_attempted"],
             total_games_completed=state_dict["total_games_completed"],
             total_valid_games=state_dict["total_valid_games"],
+            total_truncated_games=state_dict["total_truncated_games"],
+            total_truncated_positions=state_dict["total_truncated_positions"],
             total_positions_generated=state_dict["total_positions_generated"],
             cumulative_excluded_game_count_by_reason=copy.deepcopy(
                 state_dict["cumulative_excluded_game_count_by_reason"]
@@ -515,18 +555,19 @@ class ReplayInstrumentation:
         return self._active
 
     @staticmethod
-    def _record_abnormal_episode(
+    def _record_excluded_episode(
         active: _ActiveIteration,
         *,
         game_length: int | None,
         positions_generated: int,
         anomaly_types: set[str],
+        exclusion_reason: str,
     ) -> EpisodeObservation:
-        active.excluded_game_count_by_reason["abnormal_game"] += 1
+        active.excluded_game_count_by_reason[exclusion_reason] += 1
         ordered_anomalies = tuple(sorted(anomaly_types))
         active.anomaly_count_by_type.update(ordered_anomalies)
         return EpisodeObservation(
-            classification="abnormal",
+            classification=exclusion_reason,
             game_length=game_length,
             positions_generated=positions_generated,
             valid_for_scheduler=False,
@@ -536,7 +577,6 @@ class ReplayInstrumentation:
     @staticmethod
     def _build_iteration_stats(active: _ActiveIteration) -> IterationReplayStats:
         valid_lengths = tuple(active.valid_game_lengths)
-        nonempty_lengths = active.all_nonempty_game_lengths
         return IterationReplayStats(
             iteration=active.iteration,
             games_planned=active.games_planned,
@@ -548,16 +588,18 @@ class ReplayInstrumentation:
                 sum(valid_lengths) / len(valid_lengths) if valid_lengths else None
             ),
             realised_valid_states=sum(valid_lengths),
+            truncated_games=active.truncated_games,
+            truncated_positions=active.truncated_positions,
             excluded_game_count_by_reason=dict(
                 active.excluded_game_count_by_reason
             ),
             anomaly_count_by_type=dict(sorted(active.anomaly_count_by_type.items())),
             positions_generated=active.positions_generated,
-            min_game_length=min(nonempty_lengths) if nonempty_lengths else None,
-            max_game_length=max(nonempty_lengths) if nonempty_lengths else None,
+            min_game_length=min(valid_lengths) if valid_lengths else None,
+            max_game_length=max(valid_lengths) if valid_lengths else None,
             mean_game_length=(
-                sum(nonempty_lengths) / len(nonempty_lengths)
-                if nonempty_lengths
+                sum(valid_lengths) / len(valid_lengths)
+                if valid_lengths
                 else None
             ),
         )
@@ -566,14 +608,21 @@ class ReplayInstrumentation:
     def _validate_coach_metrics(
         stats: IterationReplayStats,
         coach_metrics: Mapping[str, Any],
+        raw_nonempty_lengths: Sequence[int],
     ) -> None:
         if not isinstance(coach_metrics, Mapping):
             raise ReplayInstrumentationError("coach_metrics must be a mapping")
         comparisons = (
-            ("games_completed", stats.games_completed),
+            ("games_completed", len(raw_nonempty_lengths)),
             ("positions_generated", stats.positions_generated),
-            ("min_game_length", stats.min_game_length),
-            ("max_game_length", stats.max_game_length),
+            (
+                "min_game_length",
+                min(raw_nonempty_lengths) if raw_nonempty_lengths else None,
+            ),
+            (
+                "max_game_length",
+                max(raw_nonempty_lengths) if raw_nonempty_lengths else None,
+            ),
         )
         for field_name, observed in comparisons:
             reported = coach_metrics.get(field_name, "<missing>")
@@ -585,7 +634,11 @@ class ReplayInstrumentation:
                 )
 
         reported_mean = coach_metrics.get("mean_game_length", "<missing>")
-        observed_mean = stats.mean_game_length
+        observed_mean = (
+            sum(raw_nonempty_lengths) / len(raw_nonempty_lengths)
+            if raw_nonempty_lengths
+            else None
+        )
         means_match = (
             observed_mean is None and reported_mean is None
         ) or (

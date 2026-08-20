@@ -68,7 +68,7 @@ def test_insufficient_observations_keep_ema_and_plan(count: int) -> None:
     previous_ema = scheduler.state.current_ema_length
 
     decision = scheduler.update(
-        stats(1, (30,) * count, {"incomplete_game": 2})
+        stats(1, (30,) * count, {"malformed_game": 2})
     )
 
     assert decision.observed_mean_length == (30.0 if count else None)
@@ -80,7 +80,7 @@ def test_insufficient_observations_keep_ema_and_plan(count: int) -> None:
     assert decision.skipped_reason == "insufficient_valid_observations"
     assert scheduler.state.completed_iteration == 1
     assert scheduler.state.per_iteration_valid_game_count_history == [count]
-    assert scheduler.state.excluded_game_count_by_reason == {"incomplete_game": 2}
+    assert scheduler.state.excluded_game_count_by_reason == {"malformed_game": 2}
 
 
 def test_rounding_is_ceil_not_round() -> None:
@@ -190,7 +190,7 @@ def test_same_inputs_produce_equal_decisions_and_state() -> None:
     second = AdaptiveScheduler(default_config())
     sequence = [
         stats(1, (30,) * 20),
-        stats(2, (25,) * 20, {"incomplete_game": 1}),
+        stats(2, (25,) * 20, {"malformed_game": 1}),
         stats(3, (20,) * 19),
     ]
 
@@ -199,3 +199,48 @@ def test_same_inputs_produce_equal_decisions_and_state() -> None:
 
     assert first_decisions == second_decisions
     assert first.state_dict() == second.state_dict()
+
+
+def _integer_lengths(game_count: int, positions: int) -> tuple[int, ...]:
+    base, remainder = divmod(positions, game_count)
+    return (base + 1,) * remainder + (base,) * (game_count - remainder)
+
+
+def test_short_run_records_replay_with_truncations_at_recorded_boundaries() -> None:
+    # Iteration 1 keeps the frozen N0=75.  Each later record is replayed from
+    # the pre-update EMA persisted by the original short run, but with all
+    # structurally valid truncated positions restored to the length sample.
+    records = (
+        (2, 71, 3211, 1, 35.87558333333331),
+        (3, 67, 2997, 1, 37.83883035714284),
+        (4, 65, 2824, 4, 39.16321367694804),
+        (5, 66, 2520, 1, 38.48716435607169),
+    )
+    replayed_plans = [default_config().first_iteration_games]
+
+    for iteration, games, positions, truncated_games, previous_ema in records:
+        scheduler = AdaptiveScheduler(default_config())
+        state = scheduler.state_dict()
+        state.update(
+            {
+                "completed_iteration": iteration - 1,
+                "current_ema_length": previous_ema,
+                "per_iteration_mean_valid_game_length_history": [
+                    previous_ema
+                ]
+                * (iteration - 1),
+                "per_iteration_valid_game_count_history": [games]
+                * (iteration - 1),
+            }
+        )
+        scheduler = AdaptiveScheduler.from_state_dict(default_config(), state)
+        decision = scheduler.update(
+            stats(iteration, _integer_lengths(games, positions))
+        )
+
+        assert decision.valid_observations == games
+        assert decision.excluded_observations == 0
+        assert truncated_games > 0
+        replayed_plans.append(decision.next_iteration_games)
+
+    assert replayed_plans == [75, 66, 64, 63, 66]

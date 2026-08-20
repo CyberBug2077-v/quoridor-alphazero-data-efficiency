@@ -89,10 +89,11 @@ def test_online_lifecycle_updates_scheduler_and_saves_boundary_state() -> None:
 
     _, replay_stats, decision = run_iteration(scheduler, instrumentation, 1)
 
-    assert replay_stats.valid_game_lengths == (2,)
-    assert replay_stats.excluded_game_count_by_reason["incomplete_game"] == 1
+    assert replay_stats.valid_game_lengths == (2, 1)
+    assert replay_stats.truncated_games == 1
+    assert sum(replay_stats.excluded_game_count_by_reason.values()) == 0
     assert decision.completed_iteration == 1
-    assert decision.next_iteration_games == 2
+    assert decision.next_iteration_games == 3
     assert instrumentation.state_dict()["completed_iteration"] == 1
     assert scheduler.state_dict()["completed_iteration"] == 1
 
@@ -140,3 +141,21 @@ def test_four_iteration_resume_matches_uninterrupted_execution() -> None:
         uninterrupted_instrumentation.state_dict()
     )
     assert resumed_scheduler.state_dict() == uninterrupted_scheduler.state_dict()
+    assert resumed_instrumentation.state.total_truncated_games == (
+        uninterrupted_instrumentation.state.total_truncated_games
+    )
+    assert resumed_instrumentation.state.total_truncated_games == sum(
+        result[1].truncated_games for result in resumed_results
+    )
+    assert resumed_instrumentation.state.total_truncated_positions == (
+        uninterrupted_instrumentation.state.total_truncated_positions
+    )
+    assert resumed_instrumentation.state.total_truncated_positions == sum(
+        result[1].truncated_positions for result in resumed_results
+    )
+    assert resumed_scheduler.next_iteration_games == (
+        uninterrupted_scheduler.next_iteration_games
+    )
+    assert resumed_scheduler.next_iteration_games == resumed_results[-1][
+        2
+    ].next_iteration_games

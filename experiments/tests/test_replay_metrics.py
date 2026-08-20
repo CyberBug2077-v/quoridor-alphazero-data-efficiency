@@ -63,13 +63,13 @@ def finalize_episodes(
     return instrumentation, instrumentation.finalize_iteration(coach_metrics(episodes))
 
 
-def test_valid_empty_and_incomplete_classifications() -> None:
+def test_valid_empty_and_truncated_classifications() -> None:
     instrumentation = ReplayInstrumentation(config())
     instrumentation.begin_iteration(1, 3)
 
     valid = instrumentation.observe_episode(episode(2))
     empty = instrumentation.observe_episode([])
-    incomplete = instrumentation.observe_episode(
+    truncated = instrumentation.observe_episode(
         episode(2, values=(0.0, 0.0))
     )
 
@@ -77,8 +77,29 @@ def test_valid_empty_and_incomplete_classifications() -> None:
     assert valid.valid_for_scheduler is True
     assert empty.classification == "empty"
     assert empty.game_length is None
-    assert incomplete.classification == "incomplete"
-    assert incomplete.valid_for_scheduler is False
+    assert truncated.classification == "truncated_game"
+    assert truncated.valid_for_scheduler is True
+
+
+def test_max_length_zero_value_game_is_truncated_and_valid_for_scheduler() -> None:
+    instrumentation = ReplayInstrumentation(config())
+    instrumentation.begin_iteration(1, 1)
+    truncated_episode = episode(
+        150,
+        values=(0.0,) * 150,
+        boards=(board(),) * 150,
+    )
+
+    observation = instrumentation.observe_episode(truncated_episode)
+    stats = instrumentation.finalize_iteration(coach_metrics([truncated_episode]))
+
+    assert observation.classification == "truncated_game"
+    assert stats.valid_game_lengths == (150,)
+    assert stats.valid_game_count == 1
+    assert stats.truncated_games == 1
+    assert stats.truncated_positions == 150
+    assert stats.realised_valid_states == 150
+    assert sum(stats.excluded_game_count_by_reason.values()) == 0
 
 
 def test_mixed_terminal_values_are_abnormal() -> None:
@@ -89,7 +110,7 @@ def test_mixed_terminal_values_are_abnormal() -> None:
         episode(2, values=(0.0, 1.0))
     )
 
-    assert observation.classification == "abnormal"
+    assert observation.classification == "malformed_game"
     assert "mixed_terminal_values" in observation.anomaly_types
 
 
@@ -126,7 +147,7 @@ def test_structural_anomalies_are_abnormal(mutator, anomaly: str) -> None:
 
     observation = instrumentation.observe_episode(mutator(episode(2)))
 
-    assert observation.classification == "abnormal"
+    assert observation.classification == "malformed_game"
     assert anomaly in observation.anomaly_types
 
 
@@ -136,7 +157,7 @@ def test_episode_over_length_limit_is_abnormal() -> None:
 
     observation = instrumentation.observe_episode(episode(4))
 
-    assert observation.classification == "abnormal"
+    assert observation.classification == "abnormal_length"
     assert observation.anomaly_types == ("game_length_exceeds_limit",)
 
 
@@ -144,9 +165,11 @@ def test_finalize_separates_scheduler_lengths_from_baseline_counts() -> None:
     episodes = [episode(2), [], episode(3, values=(0.0, 0.0, 0.0))]
     instrumentation, stats = finalize_episodes(episodes)
 
-    assert stats.valid_game_lengths == (2,)
-    assert stats.valid_game_count == 1
-    assert stats.realised_valid_states == 2
+    assert stats.valid_game_lengths == (2, 3)
+    assert stats.valid_game_count == 2
+    assert stats.realised_valid_states == 5
+    assert stats.truncated_games == 1
+    assert stats.truncated_positions == 3
     assert stats.games_attempted == 3
     assert stats.games_completed == 2
     assert stats.positions_generated == 5
@@ -155,8 +178,8 @@ def test_finalize_separates_scheduler_lengths_from_baseline_counts() -> None:
     assert stats.mean_game_length == 2.5
     assert stats.excluded_game_count_by_reason == {
         "empty_game": 1,
-        "abnormal_game": 0,
-        "incomplete_game": 1,
+        "malformed_game": 0,
+        "abnormal_length": 0,
     }
     assert instrumentation.state.completed_iteration == 1
 
@@ -167,7 +190,7 @@ def test_all_nonempty_abnormal_episodes_count_toward_baseline_positions() -> Non
     _, stats = finalize_episodes(episodes)
 
     assert stats.valid_game_lengths == (2,)
-    assert stats.games_completed == 2
+    assert stats.games_completed == 1
     assert stats.positions_generated == 3
 
 
@@ -265,6 +288,8 @@ def test_state_round_trip_and_resume_do_not_duplicate_counts() -> None:
     assert restored.state.total_games_attempted == 2
     assert restored.state.total_games_completed == 2
     assert restored.state.total_valid_games == 2
+    assert restored.state.total_truncated_games == 0
+    assert restored.state.total_truncated_positions == 0
     assert restored.state.total_positions_generated == 5
 
 
@@ -275,7 +300,7 @@ def test_state_round_trip_and_resume_do_not_duplicate_counts() -> None:
         {"history_iterations": 0},
         {"max_valid_game_length": 0},
         {"state_hash_algorithm": "md5"},
-        {"schema_version": 2},
+        {"schema_version": 1},
     ],
 )
 def test_invalid_config_is_rejected(overrides: dict[str, object]) -> None:

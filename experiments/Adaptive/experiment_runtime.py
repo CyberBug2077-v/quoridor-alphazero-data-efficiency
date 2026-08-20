@@ -1390,6 +1390,8 @@ def commit_iteration(
                 "max_game_length": replay_stats.max_game_length,
                 "valid_length_observations": replay_stats.valid_game_count,
                 "valid_game_lengths": list(replay_stats.valid_game_lengths),
+                "truncated_games": replay_stats.truncated_games,
+                "truncated_positions": replay_stats.truncated_positions,
                 "realised_valid_states": replay_stats.realised_valid_states,
                 "excluded_length_observations": sum(
                     replay_stats.excluded_game_count_by_reason.values()

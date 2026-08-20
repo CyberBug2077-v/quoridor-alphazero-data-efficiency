@@ -26,7 +26,7 @@ def config() -> SchedulerConfig:
 def sequence() -> list[IterationLengthStats]:
     return [
         IterationLengthStats(1, (30,) * 20, {}),
-        IterationLengthStats(2, (25,) * 20, {"incomplete_game": 1}),
+        IterationLengthStats(2, (25,) * 20, {"malformed_game": 1}),
         IterationLengthStats(3, (20,) * 19, {"empty_game": 1}),
         IterationLengthStats(4, (35,) * 20, {}),
     ]

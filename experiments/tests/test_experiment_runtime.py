@@ -35,12 +35,12 @@ def write_yaml(path: Path, payload: dict) -> None:
 
 
 def test_real_pilot_protocol_resolves_without_writing_outputs() -> None:
-    config_path = SOURCE_ROOT / "experiments" / "configs" / "adaptive_pilot_v1.yaml"
+    config_path = SOURCE_ROOT / "experiments" / "configs" / "adaptive_pilot_v2.yaml"
     run_dir = (
         SOURCE_ROOT
         / "experiments"
         / "outputs"
-        / "adaptive_pilot_seed2001_4090"
+        / "adaptive_pilot_seed2001_4090_v2"
     )
 
     result = run_experiment(RuntimeRequest("dry-run", config_path, run_dir))
@@ -48,7 +48,7 @@ def test_real_pilot_protocol_resolves_without_writing_outputs() -> None:
     manifest = result["input_manifest"]
 
     assert result["files_written"] is False
-    assert resolved["config_id"] == "adaptive_pilot_v1"
+    assert resolved["config_id"] == "adaptive_pilot_v2"
     assert resolved["model"]["board_size"] == 9
     assert resolved["self_play"]["games_per_iteration"] == 75
     assert resolved["adaptive_scheduler"]["target_states"] == 2516
@@ -64,20 +64,31 @@ def test_real_preflight_protocol_resolves_as_frozen_five_iteration_run() -> None
         SOURCE_ROOT
         / "experiments"
         / "configs"
-        / "adaptive_preflight_seed1001.yaml"
+        / "adaptive_preflight_seed1001_v2.yaml"
     )
-    run_dir = SOURCE_ROOT / "experiments" / "outputs" / "adaptive_short"
+    run_dir = SOURCE_ROOT / "experiments" / "outputs" / "adaptive_short" / "v2"
 
     result = run_experiment(RuntimeRequest("dry-run", config_path, run_dir))
 
-    assert result["resolved_config"]["config_id"] == "adaptive_preflight_seed1001"
+    assert result["resolved_config"]["config_id"] == "adaptive_preflight_seed1001_v2"
     assert result["resolved_config"]["status"] == "frozen"
     assert result["resolved_config"]["budget"]["max_iterations"] == 5
     assert result["resolved_config"]["adaptive_scheduler"]["target_states"] == 2516
+    assert result["resolved_config"]["replay_instrumentation"]["schema_version"] == 2
+    protocol = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert protocol["adaptive_scheduler"]["observation_policy"] == {
+        "accepted": "structurally_valid_nonempty_games_with_length_1_to_150",
+        "truncated_at_max_length": (
+            "include_for_scheduler_and_record_separately"
+        ),
+        "empty_game": "exclude_and_record",
+        "malformed_game": "exclude_and_record",
+        "abnormal_length": "exclude_and_record",
+    }
 
 
 def test_formal_protocol_records_production_preflight_launch_policy() -> None:
-    config_path = SOURCE_ROOT / "experiments" / "configs" / "adaptive_formal_v1.yaml"
+    config_path = SOURCE_ROOT / "experiments" / "configs" / "adaptive_formal_v2.yaml"
     protocol = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert protocol["status"] == "frozen"
@@ -94,6 +105,9 @@ def test_formal_protocol_records_production_preflight_launch_policy() -> None:
     assert protocol["freeze_gate"]["production_preflight"][
         "required_iterations"
     ] == 5
+    assert protocol["freeze_gate"]["production_preflight"][
+        "required_config_id"
+    ] == "adaptive_preflight_seed1001_v2"
     assert protocol["freeze_gate"]["pilot_gate_summary"][
         "required_before_formal_start"
     ] is False

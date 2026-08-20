@@ -54,15 +54,15 @@ experiments/
 Validate or start the Pilot protocol from the repository root:
 
 ```powershell
-python experiments/scripts/run_adaptive.py dry-run --config experiments/configs/adaptive_pilot_v1.yaml
-python experiments/scripts/run_adaptive.py fresh --config experiments/configs/adaptive_pilot_v1.yaml
-python experiments/scripts/run_adaptive.py resume --run-dir outputs/adaptive_pilot_seed2001_4090
+python experiments/scripts/run_adaptive.py dry-run --config experiments/configs/adaptive_pilot_v2.yaml
+python experiments/scripts/run_adaptive.py fresh --config experiments/configs/adaptive_pilot_v2.yaml
+python experiments/scripts/run_adaptive.py resume --run-dir outputs/adaptive_pilot_seed2001_4090_v2
 ```
 
 Verify a completed run and evaluate the Pilot gate:
 
 ```powershell
-python experiments/scripts/verify_adaptive.py --run-dir outputs/adaptive_pilot_seed2001_4090
+python experiments/scripts/verify_adaptive.py --run-dir outputs/adaptive_pilot_seed2001_4090_v2
 ```
 
 The resume-equivalence gate additionally requires an independently completed
@@ -85,16 +85,21 @@ overwritten or reused for a different run.
 The activation order is:
 
 1. `matched_compute_v1.yaml` defines the Baseline--Adaptive fairness contract.
-2. `adaptive_preflight_seed1001.yaml` runs the frozen Scheduler for five
+2. `adaptive_preflight_seed1001_v2.yaml` runs the frozen Scheduler for five
    production iterations, including an interruption/resume boundary and an
    online evaluation at iteration 5.
-3. After the production preflight completes, `adaptive_pilot_v1.yaml` and the
-   frozen `adaptive_formal_v1.yaml` may start in parallel. Fresh runs require a
+3. After the production preflight completes, `adaptive_pilot_v2.yaml` and the
+   frozen `adaptive_formal_v2.yaml` may start in parallel. Fresh runs require a
    clean worktree and record the actual Git HEAD in their resolved artifacts.
 4. `adaptive_holdout_v1.yaml` and `adaptive_fixed_basket_v1.yaml` are frozen
    before the formal run.
 5. `h2_v1.yaml`, `h3_v1.yaml`, and `head_to_head_v1.yaml` are frozen before any
    formal result is inspected.
+
+The v1 Adaptive Scheduler protocols and `outputs/adaptive_short` remain immutable
+evidence of the original run. Version 2 changes only the observation semantics:
+structurally valid all-zero games are recorded as truncated and remain in the
+Scheduler length estimate; they are not excluded observations.
 
 ## Baseline contract
 

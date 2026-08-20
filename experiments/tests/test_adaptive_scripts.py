@@ -66,7 +66,7 @@ def completed_run(root: Path, *, resumed: bool) -> tuple[Path, Path]:
 def test_run_adaptive_cli_dry_run_and_stable_exit_codes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pilot = SOURCE_ROOT / "experiments" / "configs" / "adaptive_pilot_v1.yaml"
+    pilot = SOURCE_ROOT / "experiments" / "configs" / "adaptive_pilot_v2.yaml"
     assert run_adaptive.main(["dry-run", "--config", str(pilot)]) == 0
 
     invalid_root = tmp_path / "invalid"

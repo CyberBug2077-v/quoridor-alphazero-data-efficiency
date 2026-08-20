@@ -1,0 +1,255 @@
+schema_version: 1
+config_id: adaptive_preflight_seed1001_v2
+status: frozen
+
+revision:
+  supersedes: adaptive_preflight_seed1001
+  reason: validate_truncated_games_as_scheduler_length_observations
+
+provenance:
+  baseline_config: ../baseline/configs/baseline_reproduction.yaml
+  baseline_config_sha256: 4e76db7290ea755deae7f1e0cd556a7c84b60650dcce473ad3f052709aa83417
+  baseline_git_commit: 1bf5d8c7354d0b1cc5dd10034419bcff6800ba03
+  require_clean_worktree: true
+
+outputs:
+  root: outputs/adaptive_short/v2
+  resolved_protocol: outputs/adaptive_short/v2/resolved_config.yaml
+  input_manifest: outputs/adaptive_short/v2/input_manifest.json
+  run_log: outputs/adaptive_short/v2/run.log
+  run_metadata: outputs/adaptive_short/v2/run_metadata.json
+  metrics: outputs/adaptive_short/v2/metrics.jsonl
+  summary: outputs/adaptive_short/v2/summary.json
+  checkpoint_manifest: outputs/adaptive_short/v2/checkpoint_manifest.json
+  checkpoints: outputs/adaptive_short/v2/checkpoints
+  scheduler_state: outputs/adaptive_short/v2/scheduler_state
+  evaluations: outputs/adaptive_short/v2/evaluations
+
+immutability:
+  runnable_status: frozen
+  config_id_reuse_after_run_start: forbidden
+  frozen_parameter_change: create_new_versioned_config_id
+  draft_may_be_completed_before_first_freeze: true
+  write_resolved_config_at_run_start: true
+  config_sha256_destination: outputs.input_manifest
+  write_config_sha256_into_yaml: false
+  result_values_in_protocol_config: forbidden
+  allowed_result_formats:
+    - json
+    - jsonl
+    - csv
+
+input_integrity:
+  algorithm: sha256
+  required_for:
+    - matched_compute_contract
+    - accepted_pilot_config
+    - pretrained_checkpoint
+    - shared_holdout_contract
+    - protocol_configs
+    - resolved_configs
+
+production_preflight:
+  role: formal_launch_gate_replacement
+  required_iterations: 5
+  formal_config: configs/adaptive_formal_v2.yaml
+  original_pilot:
+    planned_duration_hours: [4, 8]
+    status_before_formal_start: not_completed
+    required_before_formal_start: false
+  scheduler_parameters: frozen_before_run
+
+run:
+  id: adaptive_preflight_seed1001_v2
+  seed: 1001
+  device: cuda
+  gpu_index: 0
+  deterministic: false
+  output_dir: outputs/adaptive_short/v2
+  require_clean_worktree: true
+
+inputs:
+  matched_compute:
+    path: configs/matched_compute_v1.yaml
+    sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
+  accepted_pilot_config:
+    path: configs/adaptive_pilot_v2.yaml
+    sha256: cd4bd14c3ae16f5fa77ca936b75dc3bef8e06be371a54a5d93ea31539bebc14c
+  pilot_gate_summary:
+    path: outputs/adaptive_pilot_seed2001_4090_v2/pilot_gate_summary.json
+    sha256: null
+  shared_holdout_contract:
+    path: configs/adaptive_holdout_v1.yaml
+    sha256: 2826ce72ceb08c7c74e76aea244c738a2daf0660e060ed432dc652d22a6afcaf
+  pretrained_checkpoint:
+    path: ../baseline/outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
+    sha256: 4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667
+
+initialization:
+  mode: pretrained_checkpoint
+  checkpoint_path: ../baseline/outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
+  checkpoint_sha256: 4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667
+  load_weights: true
+  load_replay: false
+  load_optimizer_state: false
+  load_tracker_state: false
+  start_iteration: 1
+
+shared_algorithm_parameters:
+  authority: configs/matched_compute_v1.yaml
+  inherit_from: ../baseline/configs/baseline_reproduction.yaml
+  equality_check: all_fields_listed_in_matched_compute.shared_algorithm_parameters
+
+self_play:
+  games_per_iteration_source: adaptive_scheduler.next_iteration_games
+  iterations_safety_limit: 300
+
+adaptive_scheduler:
+  acceptance_status: frozen_before_production_preflight
+  method: target_states
+  baseline_games: 75
+  target_states: 2516
+  target_calibration:
+    source: ../baseline/outputs/baseline_reproduction_seed1001_4090/metrics.jsonl
+    source_sha256: 5e9a8795b7ee27706eb9db42a675c59ed72147bc8261f714245020887bb4db4f
+    window_iterations: [1, 40]
+    statistic: pooled_mean_game_length
+  length_estimator:
+    method: ema
+    alpha: 0.25
+    window: null
+    minimum_observations: 20
+    observation_statistic: mean_valid_completed_game_length
+  warm_start:
+    first_iteration_games: 75
+    initial_length_value: 33.5363333333333
+    source: target_calibration
+  bounds:
+    min_games: 50
+    max_games: 150
+  rounding: ceil
+  update_frequency: once_per_iteration
+  update_timing: after_iteration_is_complete_before_next_iteration_is_started
+  clipping: after_rounding
+  observation_policy:
+    accepted: structurally_valid_nonempty_games_with_length_1_to_150
+    truncated_at_max_length: include_for_scheduler_and_record_separately
+    empty_game: exclude_and_record
+    malformed_game: exclude_and_record
+    abnormal_length: exclude_and_record
+  estimator_guard_policy:
+    fewer_than_20_valid_games: keep_previous_estimator_and_next_game_plan
+    non_finite_estimator: fail_run
+  state_schema:
+    version: 1
+    fields:
+      - completed_iteration
+      - valid_game_count
+      - excluded_game_count_by_reason
+      - per_iteration_mean_valid_game_length_history
+      - per_iteration_valid_game_count_history
+      - current_ema_length
+      - next_iteration_games
+      - clipping_decision
+      - scheduler_rng_state
+
+budget:
+  max_gpu_hours: 1
+  max_iterations: 5
+  max_wall_clock_hours: 30
+  allocated_gpu_count: 1
+  gpu_hour_formula: sum(iteration_seconds * allocated_gpu_count) / 3600
+  evaluation_time_included: false
+  instrumentation_overhead_included: true
+  crossing_policy: keep_crossing_iteration_and_do_not_start_another
+  maximum_overshoot: one_completed_iteration
+  interruption:
+    safe_boundary: completed_iteration
+    persist_before_exit:
+      - model_and_optimizer
+      - replay_state
+      - scheduler_state
+      - instrumentation_state
+      - rng_state
+      - cumulative_gpu_hours
+    resume_recomputes_scheduler_plan: false
+    equivalence_requirement: same_scheduler_decisions_replay_state_and_rng_stream_as_uninterrupted_execution
+
+checkpoint:
+  directory: outputs/adaptive_short/v2/checkpoints
+  save_every_iterations: 10
+  save_replay_state: true
+  save_scheduler_state: true
+  save_instrumentation_state: true
+  save_rng_state: true
+  compute_sha256: true
+  sha256_destination: outputs.checkpoint_manifest
+  record_cumulative_gpu_hours: true
+  gpu_hour_analysis_milestones:
+    - 0.0
+    - 2.1198430262922514
+    - 4.055928015003963
+    - 5.915037855762831
+    - 7.74554526080817
+    - 9.657539357861964
+    - 11.578118647181476
+    - 13.49890914103404
+    - 15.400869534123915
+    - 17.276270976930004
+    - 19.115693432471787
+    - 20.004163361943395
+  milestone_selection: latest_completed_checkpoint_not_after_target
+
+instrumentation:
+  inherit_baseline_fields: true
+  tracker_file: tracker.json
+  scheduler_overhead_timing: true
+  persist_tracker_state: true
+  verify_resume_continuity: true
+  verify_evaluation_read_only: true
+  replay_instrumentation_state_schema: 2
+
+metrics:
+  format: jsonl
+  one_record_per_completed_iteration: true
+  required_fields:
+    - iteration
+    - games_planned
+    - games_completed
+    - positions_generated
+    - mean_game_length
+    - valid_length_observations
+    - truncated_games
+    - truncated_positions
+    - realised_valid_states
+    - excluded_length_observations
+    - scheduler_length_estimate
+    - scheduler_unclipped_games
+    - scheduler_planned_games
+    - scheduler_clipped
+    - scheduler_seconds
+    - replay_buffer_size
+    - samples_seen
+    - optimizer_steps
+    - self_play_seconds
+    - training_seconds
+    - iteration_seconds
+    - cumulative_gpu_hours
+    - checkpoint_path
+    - checkpoint_sha256
+
+evaluation:
+  online:
+    inherit_from: ../baseline/configs/baseline_reproduction.yaml
+    evaluate_every_iterations: 5
+    cost_accounting: excluded_from_training_gpu_hour_budget_and_recorded_separately
+  matched_compute:
+    schedule_source: configs/matched_compute_v1.yaml
+    checkpoint_selection: latest_completed_checkpoint_not_after_target
+    protocols:
+      - path: configs/adaptive_holdout_v1.yaml
+        sha256: 2826ce72ceb08c7c74e76aea244c738a2daf0660e060ed432dc652d22a6afcaf
+      - path: configs/adaptive_fixed_basket_v1.yaml
+        sha256: f2efbf8d31af6b5fa69d006d8e037e7b79ca0ad0586d73e4963a5e020971fb1a
+      - path: configs/head_to_head_v1.yaml
+        sha256: ff4015d0aeea95f91c22fde4865b8b17443afd249894010f91a9138a3d4b695d

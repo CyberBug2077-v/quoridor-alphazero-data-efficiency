@@ -133,6 +133,69 @@ def _load_metrics(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _verify_observation_metrics(
+    resolved: dict[str, Any], metrics: list[dict[str, Any]]
+) -> None:
+    instrumentation_schema = int(
+        resolved.get("replay_instrumentation", {}).get("schema_version", 1)
+    )
+    if instrumentation_schema < 2:
+        return
+    max_length = int(
+        resolved["replay_instrumentation"]["max_valid_game_length"]
+    )
+    exclusion_reasons = {"empty_game", "malformed_game", "abnormal_length"}
+    for iteration, record in enumerate(metrics, 1):
+        lengths = record.get("valid_game_lengths")
+        exclusions = record.get("excluded_game_count_by_reason")
+        _require(isinstance(lengths, list), f"iteration {iteration} lengths are missing")
+        _require(
+            all(
+                isinstance(length, int)
+                and not isinstance(length, bool)
+                and 1 <= length <= max_length
+                for length in lengths
+            ),
+            f"iteration {iteration} contains an invalid scheduler length",
+        )
+        _require(
+            isinstance(exclusions, dict) and set(exclusions) == exclusion_reasons,
+            f"iteration {iteration} exclusion reasons differ from policy",
+        )
+        _require(
+            record.get("games_completed")
+            == record.get("valid_length_observations")
+            == len(lengths),
+            f"iteration {iteration} completed and valid observation counts differ",
+        )
+        _require(
+            record.get("realised_valid_states") == sum(lengths),
+            f"iteration {iteration} realised valid states differ from lengths",
+        )
+        _require(
+            record.get("excluded_length_observations") == sum(exclusions.values()),
+            f"iteration {iteration} excluded observation count differs from reasons",
+        )
+        truncated_games = record.get("truncated_games")
+        truncated_positions = record.get("truncated_positions")
+        _require(
+            isinstance(truncated_games, int)
+            and not isinstance(truncated_games, bool)
+            and 0 <= truncated_games <= len(lengths),
+            f"iteration {iteration} truncated game count is invalid",
+        )
+        _require(
+            isinstance(truncated_positions, int)
+            and not isinstance(truncated_positions, bool)
+            and 0 <= truncated_positions <= sum(lengths),
+            f"iteration {iteration} truncated position count is invalid",
+        )
+        _require(
+            (truncated_games == 0) == (truncated_positions == 0),
+            f"iteration {iteration} truncated games and positions disagree",
+        )
+
+
 def _verify_hash(path: Path, expected: Any, label: str) -> str:
     _require(path.is_file(), f"missing {label}: {path}")
     _require(
@@ -428,6 +491,18 @@ def _verify_recovery(
     _require(root_tracker == tracker_state, "root tracker state is stale")
     _require(root_resource == resource_state, "root resource state is stale")
 
+    if int(resolved["replay_instrumentation"].get("schema_version", 1)) >= 2:
+        _require(
+            tracker_state.get("total_truncated_games")
+            == sum(record["truncated_games"] for record in metrics),
+            "tracker truncated game total differs from metrics",
+        )
+        _require(
+            tracker_state.get("total_truncated_positions")
+            == sum(record["truncated_positions"] for record in metrics),
+            "tracker truncated position total differs from metrics",
+        )
+
     scheduler = AdaptiveScheduler.from_state_dict(
         SchedulerConfig(**resolved["adaptive_scheduler"]), scheduler_state
     )
@@ -535,6 +610,7 @@ def verify_run(run_dir: Path | str) -> VerifiedRun:
     resolved = _load_yaml(path / "resolved_config.yaml")
     input_manifest = _verify_inputs(path, resolved)
     metrics = _load_metrics(path / "metrics.jsonl")
+    _verify_observation_metrics(resolved, metrics)
     scheduler, direction_correct, eligible_direction_updates = (
         _scheduler_from_metrics(resolved, metrics)
     )
@@ -675,6 +751,10 @@ def _resume_equivalence(
         "games_completed",
         "positions_generated",
         "valid_game_lengths",
+        "truncated_games",
+        "truncated_positions",
+        "realised_valid_states",
+        "excluded_length_observations",
         "scheduler_length_estimate",
         "scheduler_unclipped_games",
         "scheduler_planned_games",
