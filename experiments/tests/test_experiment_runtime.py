@@ -66,7 +66,7 @@ def test_real_preflight_protocol_resolves_as_frozen_five_iteration_run() -> None
         / "configs"
         / "adaptive_preflight_seed1001_v2.yaml"
     )
-    run_dir = SOURCE_ROOT / "experiments" / "outputs" / "adaptive_short" / "v2"
+    run_dir = SOURCE_ROOT / "experiments" / "outputs" / "adaptive_short_v2"
 
     result = run_experiment(RuntimeRequest("dry-run", config_path, run_dir))
 

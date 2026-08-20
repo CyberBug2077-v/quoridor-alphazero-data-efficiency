@@ -13,17 +13,17 @@ provenance:
   require_clean_worktree: true
 
 outputs:
-  root: outputs/adaptive_short/v2
-  resolved_protocol: outputs/adaptive_short/v2/resolved_config.yaml
-  input_manifest: outputs/adaptive_short/v2/input_manifest.json
-  run_log: outputs/adaptive_short/v2/run.log
-  run_metadata: outputs/adaptive_short/v2/run_metadata.json
-  metrics: outputs/adaptive_short/v2/metrics.jsonl
-  summary: outputs/adaptive_short/v2/summary.json
-  checkpoint_manifest: outputs/adaptive_short/v2/checkpoint_manifest.json
-  checkpoints: outputs/adaptive_short/v2/checkpoints
-  scheduler_state: outputs/adaptive_short/v2/scheduler_state
-  evaluations: outputs/adaptive_short/v2/evaluations
+  root: outputs/adaptive_short_v2
+  resolved_protocol: outputs/adaptive_short_v2/resolved_config.yaml
+  input_manifest: outputs/adaptive_short_v2/input_manifest.json
+  run_log: outputs/adaptive_short_v2/run.log
+  run_metadata: outputs/adaptive_short_v2/run_metadata.json
+  metrics: outputs/adaptive_short_v2/metrics.jsonl
+  summary: outputs/adaptive_short_v2/summary.json
+  checkpoint_manifest: outputs/adaptive_short_v2/checkpoint_manifest.json
+  checkpoints: outputs/adaptive_short_v2/checkpoints
+  scheduler_state: outputs/adaptive_short_v2/scheduler_state
+  evaluations: outputs/adaptive_short_v2/evaluations
 
 immutability:
   runnable_status: frozen
@@ -65,7 +65,7 @@ run:
   device: cuda
   gpu_index: 0
   deterministic: false
-  output_dir: outputs/adaptive_short/v2
+  output_dir: outputs/adaptive_short_v2
   require_clean_worktree: true
 
 inputs:
@@ -176,7 +176,7 @@ budget:
     equivalence_requirement: same_scheduler_decisions_replay_state_and_rng_stream_as_uninterrupted_execution
 
 checkpoint:
-  directory: outputs/adaptive_short/v2/checkpoints
+  directory: outputs/adaptive_short_v2/checkpoints
   save_every_iterations: 10
   save_replay_state: true
   save_scheduler_state: true

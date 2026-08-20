@@ -101,6 +101,9 @@ evidence of the original run. Version 2 changes only the observation semantics:
 structurally valid all-zero games are recorded as truncated and remain in the
 Scheduler length estimate; they are not excluded observations.
 
+The completed version 2 production preflight is stored in
+`outputs/adaptive_short_v2`.
+
 ## Baseline contract
 
 Every extension run must identify its baseline inputs by content rather than

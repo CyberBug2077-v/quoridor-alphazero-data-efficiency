@@ -61,7 +61,7 @@ freeze_gate:
     scheduler_parameters: frozen_before_production_preflight
   production_preflight:
     config_path: configs/adaptive_preflight_seed1001_v2.yaml
-    summary_path: outputs/adaptive_short/v2/summary.json
+    summary_path: outputs/adaptive_short_v2/summary.json
     required_status: completed
     required_config_id: adaptive_preflight_seed1001_v2
     required_run_id: adaptive_preflight_seed1001_v2
