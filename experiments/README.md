@@ -30,20 +30,21 @@ New work developed here includes:
 | Arena and fixed opponents | `../baseline/arena/` | Inherited/adapted baseline |
 | Heuristic JS MCTS opponent | `../baseline/external/js-mcts/` | Inherited dependency |
 | Baseline smoke, pretraining, and reproduction | `../baseline/configs/`, `../baseline/scripts/` | Reproduction infrastructure |
-| Replay instrumentation and adaptive scheduling | `experiments/` | New dissertation work |
+| Replay instrumentation and adaptive scheduling | `experiments/Adaptive/` | New dissertation work |
 | Matched-compute experiments and analysis | `experiments/` | New dissertation work |
 
-The baseline reproduction and H1 analysis are frozen. Subsequent Adaptive
-implementation, experiment, and analysis changes belong in `experiments/`.
+The baseline reproduction and H1 analysis are frozen. Adaptive runtime code,
+instrumentation, resource accounting, and scheduling belong in
+`experiments/Adaptive/`; protocols, generated artifacts, and tests remain in
+their dedicated directories under `experiments/`.
 
 ## Planned layout
 
 ```text
 experiments/
+|-- Adaptive/             Adaptive scheduler, instrumentation, accounting, and runtime
 |-- configs/              Instrumented and adaptive experiment configurations
 |-- outputs/              Generated experiment artifacts
-|-- quoridor_project/     New instrumentation and adaptive implementation
-|-- scripts/              Adaptive experiment launchers
 `-- tests/                Unit, integration, and regression tests for new work
 ```
 
