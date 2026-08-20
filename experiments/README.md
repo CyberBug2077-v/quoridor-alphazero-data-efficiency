@@ -85,10 +85,12 @@ overwritten or reused for a different run.
 The activation order is:
 
 1. `matched_compute_v1.yaml` defines the Baseline--Adaptive fairness contract.
-2. `adaptive_pilot_v1.yaml` validates the scheduler and resume behaviour.
-3. `adaptive_formal_v1.yaml` may change from `awaiting_pilot_gate` to `frozen`
-   only after the Pilot gate passes and its summary hash and experiment commit
-   are recorded.
+2. `adaptive_preflight_seed1001.yaml` runs the frozen Scheduler for five
+   production iterations, including an interruption/resume boundary and an
+   online evaluation at iteration 5.
+3. After the production preflight completes, `adaptive_pilot_v1.yaml` and the
+   frozen `adaptive_formal_v1.yaml` may start in parallel. Fresh runs require a
+   clean worktree and record the actual Git HEAD in their resolved artifacts.
 4. `adaptive_holdout_v1.yaml` and `adaptive_fixed_basket_v1.yaml` are frozen
    before the formal run.
 5. `h2_v1.yaml`, `h3_v1.yaml`, and `head_to_head_v1.yaml` are frozen before any

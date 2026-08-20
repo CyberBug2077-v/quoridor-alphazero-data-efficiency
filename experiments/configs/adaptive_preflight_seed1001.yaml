@@ -232,7 +232,7 @@ metrics:
 evaluation:
   online:
     inherit_from: ../baseline/configs/baseline_reproduction.yaml
-    evaluate_every_iterations: 20
+    evaluate_every_iterations: 5
     cost_accounting: excluded_from_training_gpu_hour_budget_and_recorded_separately
   matched_compute:
     schedule_source: configs/matched_compute_v1.yaml
