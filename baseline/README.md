@@ -229,7 +229,7 @@ Install Python dependencies and the local arena package with the selected
 environment:
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install -r ../requirements.txt
 python -m pip install -e external/quoridor-server
 ```
 

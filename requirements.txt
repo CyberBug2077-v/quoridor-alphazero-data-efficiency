@@ -15,4 +15,4 @@ node
 psutil
 
 # Pyquoridor (install from local package)
-# Install with: pip install -e ./external/quoridor-server
+# Install with: pip install -e ./baseline/external/quoridor-server
