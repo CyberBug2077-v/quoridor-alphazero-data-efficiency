@@ -45,8 +45,29 @@ experiments/
 |-- Adaptive/             Adaptive scheduler, instrumentation, accounting, and runtime
 |-- configs/              Instrumented and adaptive experiment configurations
 |-- outputs/              Generated experiment artifacts
+|-- scripts/              Adaptive run and verification CLI entry points
 `-- tests/                Unit, integration, and regression tests for new work
 ```
+
+## Adaptive command-line entry points
+
+Validate or start the Pilot protocol from the repository root:
+
+```powershell
+python experiments/scripts/run_adaptive.py dry-run --config experiments/configs/adaptive_pilot_v1.yaml
+python experiments/scripts/run_adaptive.py fresh --config experiments/configs/adaptive_pilot_v1.yaml
+python experiments/scripts/run_adaptive.py resume --run-dir outputs/adaptive_pilot_seed2001_4090
+```
+
+Verify a completed run and evaluate the Pilot gate:
+
+```powershell
+python experiments/scripts/verify_adaptive.py --run-dir outputs/adaptive_pilot_seed2001_4090
+```
+
+The resume-equivalence gate additionally requires an independently completed
+uninterrupted reference run, supplied with `--resume-reference-run-dir`. The
+verifier writes `pilot_gate_summary.json` only for Pilot protocols.
 
 ## Frozen protocol lifecycle
 

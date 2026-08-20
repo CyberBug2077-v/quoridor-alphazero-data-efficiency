@@ -67,6 +67,14 @@ class ExperimentRuntimeError(RuntimeError):
     """Raised when an Adaptive run cannot preserve its protocol boundary."""
 
 
+class ProtocolValidationError(ExperimentRuntimeError):
+    """Raised when a configuration, hash, or frozen protocol is invalid."""
+
+
+class ResumeStateError(ExperimentRuntimeError):
+    """Raised when no complete and internally consistent resume boundary exists."""
+
+
 class _AdaptiveStop(Exception):
     """Internal control flow raised after a terminal iteration is committed."""
 
@@ -275,6 +283,28 @@ def _resolve_baseline_reference(requested: str | Path, baseline_path: Path) -> P
         if candidate.exists():
             return candidate
     return candidates[1]
+
+
+def configured_run_dir(config_path: Path | str) -> Path:
+    """Return the output directory declared by an Adaptive protocol."""
+
+    path = Path(config_path).expanduser().resolve()
+    try:
+        protocol = _load_yaml(path)
+        run = _require_mapping(protocol, "run", "protocol")
+    except (ExperimentRuntimeError, OSError, ValueError, KeyError) as exc:
+        raise ProtocolValidationError(str(exc)) from exc
+    outputs = protocol.get("outputs", {})
+    requested = run.get("output_dir")
+    if requested is None and isinstance(outputs, dict):
+        requested = outputs.get("root")
+    if not isinstance(requested, str) or not requested:
+        raise ProtocolValidationError("Adaptive protocol output directory is missing")
+    return _resolve_reference(
+        requested,
+        config_path=path,
+        experiments_root=EXPERIMENTS_ROOT,
+    )
 
 
 def _expected_sha(value: object, *, label: str) -> str:
@@ -738,6 +768,7 @@ def resolve_adaptive_protocol(
         "checkpoint": _normalise_checkpoint(protocol, run_dir),
         "instrumentation": copy.deepcopy(protocol.get("instrumentation", {})),
         "metrics": copy.deepcopy(protocol.get("metrics", {})),
+        "pilot_gate": copy.deepcopy(protocol.get("pilot_gate", {})),
         "evaluation": _normalise_evaluation(baseline, protocol),
         "logging": {
             "metrics_file": "metrics.jsonl",
@@ -1226,22 +1257,45 @@ def commit_iteration(
             raise ExperimentRuntimeError("checkpoint timer returned an invalid duration")
 
         evaluation_seconds = 0.0
+        evaluation_output_path: Path | None = None
+        evaluation_state_preserved: bool | None = None
         evaluation = resolution.config["evaluation"]
         cadence = evaluation.get("evaluate_every_iterations")
         if evaluation.get("enabled") and cadence and iteration % int(cadence) == 0:
-            output_path = (
+            evaluation_output_path = (
                 run_dir
                 / "evaluations"
                 / f"evaluation_checkpoint_{iteration}.json"
             )
             runner = evaluation_runner or _default_evaluation_runner
-            evaluation_seconds = float(
-                runner(resolution.config, runtime, pending_model, output_path)
+            training_rng_state = _capture_rng_state()
+            optimizer_state_before_evaluation = copy.deepcopy(
+                _capture_optimizer_state(runtime.network)
             )
+            try:
+                evaluation_seconds = float(
+                    runner(
+                        resolution.config,
+                        runtime,
+                        pending_model,
+                        evaluation_output_path,
+                    )
+                )
+            finally:
+                _load_network_checkpoint(runtime.network, pending_model)
+                _restore_optimizer_state(
+                    runtime.network, optimizer_state_before_evaluation
+                )
+                _restore_rng_state(training_rng_state)
             if not math.isfinite(evaluation_seconds) or evaluation_seconds < 0.0:
                 raise ExperimentRuntimeError(
                     "evaluation runner returned an invalid duration"
                 )
+            if not evaluation_output_path.is_file():
+                raise ExperimentRuntimeError(
+                    "evaluation runner did not write its audit record"
+                )
+            evaluation_state_preserved = True
 
         _atomic_write_torch(
             pending_runtime_state,
@@ -1305,6 +1359,7 @@ def commit_iteration(
         )
 
         _atomic_write_json(resource_state_path, accountant.state_dict())
+        resource_state_sha = sha256_file(resource_state_path)
         final_model = final_dir / pending_model.name
         final_replay = final_dir / pending_replay.name
         final_runtime_state = final_dir / pending_runtime_state.name
@@ -1346,6 +1401,9 @@ def commit_iteration(
                 "instrumentation_seconds": resource_record.instrumentation_seconds,
                 "checkpoint_seconds": resource_record.checkpoint_seconds,
                 "evaluation_seconds": resource_record.evaluation_seconds,
+                "evaluation_training_state_preserved": (
+                    evaluation_state_preserved
+                ),
                 "iteration_seconds": resource_record.iteration_seconds,
                 "cumulative_training_seconds": (
                     resource_record.cumulative_training_seconds
@@ -1354,6 +1412,11 @@ def commit_iteration(
                 "self_play_time_fraction": resource_record.self_play_time_fraction,
                 "checkpoint_path": final_model.as_posix(),
                 "checkpoint_sha256": model_sha,
+                "replay_state_sha256": replay_sha,
+                "runtime_state_sha256": runtime_state_sha,
+                "scheduler_state_sha256": scheduler_state_sha,
+                "tracker_state_sha256": tracker_state_sha,
+                "resource_state_sha256": resource_state_sha,
                 "budget_continue_run": budget_decision.continue_run,
                 "budget_stop_reason": budget_decision.stop_reason,
                 "budget_crossing_iteration": (
@@ -1431,8 +1494,14 @@ def commit_iteration(
 
         cadence = int(resolution.config["checkpoint"]["save_every_iterations"])
         is_final = not budget_decision.continue_run
-        if current_milestones or iteration % cadence == 0 or is_final:
-            _upsert_archived_checkpoint(
+        current_archive_path: Path | None = None
+        if (
+            current_milestones
+            or iteration % cadence == 0
+            or is_final
+            or evaluation_output_path is not None
+        ):
+            current_archive_path = _upsert_archived_checkpoint(
                 checkpoint_manifest,
                 source_model=pending_model,
                 archive_dir=run_dir / "checkpoints",
@@ -1441,6 +1510,18 @@ def commit_iteration(
                 is_final=is_final,
                 milestones=current_milestones,
             )
+        if evaluation_output_path is not None:
+            assert current_archive_path is not None
+            evaluation_record = _read_json(evaluation_output_path)
+            evaluation_record.update(
+                {
+                    "iteration": iteration,
+                    "checkpoint_path": current_archive_path.as_posix(),
+                    "checkpoint_sha256": sha256_file(current_archive_path),
+                    "training_state_preserved": True,
+                }
+            )
+            _atomic_write_json(evaluation_output_path, evaluation_record)
         checkpoint_manifest["last_committed_iteration"] = iteration
         pending_checkpoint_manifest = pending_dir / "checkpoint_manifest.json"
         _atomic_write_json(pending_checkpoint_manifest, checkpoint_manifest)
@@ -1465,7 +1546,7 @@ def commit_iteration(
                 },
                 "resource_state": {
                     "path": (final_dir / resource_state_path.name).as_posix(),
-                    "sha256": sha256_file(resource_state_path),
+                    "sha256": resource_state_sha,
                 },
                 "metrics_record": {
                     "path": (final_dir / "metrics_record.json").as_posix(),
@@ -1477,6 +1558,11 @@ def commit_iteration(
                 },
             },
         }
+        if evaluation_output_path is not None:
+            component_manifest["artifacts"]["evaluation"] = {
+                "path": evaluation_output_path.as_posix(),
+                "sha256": sha256_file(evaluation_output_path),
+            }
         _atomic_write_json(pending_dir / "commit_manifest.json", component_manifest)
         os.replace(pending_dir, final_dir)
         _atomic_write_json(checkpoint_manifest_path, checkpoint_manifest)
@@ -1605,6 +1691,8 @@ def _load_latest_commit(
         checkpoint_manifest.get("last_committed_iteration"),
         iteration,
     }
+    if "evaluation" in paths:
+        artifact_iterations.add(_read_json(paths["evaluation"]).get("iteration"))
     if artifact_iterations != {iteration}:
         raise ExperimentRuntimeError(
             f"resume artifacts do not share one iteration: {artifact_iterations}"
@@ -1728,9 +1816,12 @@ def _run_training(
             scheduler.state_dict(),
         )
     else:
-        scheduler, instrumentation, accountant, _ = _load_latest_commit(
-            resolution, runtime
-        )
+        try:
+            scheduler, instrumentation, accountant, _ = _load_latest_commit(
+                resolution, runtime
+            )
+        except (OSError, RuntimeError, ValueError, KeyError, EOFError) as exc:
+            raise ResumeStateError(str(exc)) from exc
 
     runtime.train_args.numIters = int(resolved["budget"]["max_iterations"]) + 1
     runtime.train_args.numEps = scheduler.next_iteration_games
@@ -1855,7 +1946,10 @@ def run_experiment(
     if request.mode in {"dry-run", "fresh"}:
         if request.config_path is None:
             raise ValueError("config_path is required for dry-run and fresh modes")
-        resolution = resolve_adaptive_protocol(request.config_path, run_dir)
+        try:
+            resolution = resolve_adaptive_protocol(request.config_path, run_dir)
+        except (ExperimentRuntimeError, OSError, ValueError, KeyError) as exc:
+            raise ProtocolValidationError(str(exc)) from exc
         if request.mode == "dry-run":
             return {
                 "mode": "dry-run",
@@ -1870,7 +1964,9 @@ def run_experiment(
             resolution.config["protocol_requirements"]["require_clean_worktree"]
             and git["dirty"]
         ):
-            raise ExperimentRuntimeError("fresh Adaptive run requires a clean worktree")
+            raise ProtocolValidationError(
+                "fresh Adaptive run requires a clean worktree"
+            )
         _initialise_device(resolution.config)
         _set_seed(
             int(resolution.config["run"]["seed"]),
@@ -1887,7 +1983,10 @@ def run_experiment(
             evaluation_runner=evaluation_runner,
         )
 
-    resolution = _load_saved_resolution(run_dir, request.config_path)
+    try:
+        resolution = _load_saved_resolution(run_dir, request.config_path)
+    except (OSError, RuntimeError, ValueError, KeyError, EOFError) as exc:
+        raise ResumeStateError(str(exc)) from exc
     _initialise_device(resolution.config)
     runtime = runtime_builder(resolution.config)
     _append_run_log(run_dir, "resume validation started")
@@ -1929,10 +2028,13 @@ def main(argv: list[str] | None = None) -> int:
 __all__ = [
     "BaselineRuntime",
     "ExperimentRuntimeError",
+    "ProtocolValidationError",
     "ResolvedRuntime",
+    "ResumeStateError",
     "RuntimeRequest",
     "build_baseline_runtime",
     "commit_iteration",
+    "configured_run_dir",
     "resolve_adaptive_protocol",
     "run_experiment",
 ]
