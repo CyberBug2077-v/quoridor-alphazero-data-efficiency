@@ -13,16 +13,16 @@ provenance:
   require_clean_worktree: true
 
 outputs:
-  root: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1
-  resolved_protocol: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/resolved_config.yaml
-  input_manifest: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/input_manifest.json
-  run_log: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/run.log
-  games: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/games.jsonl
-  attempts: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/attempts.jsonl
-  evaluation_manifest: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/evaluation_manifest.json
-  checkpoint_pairs: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/checkpoint_pairs.csv
-  checkpoint_summary: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/checkpoint_summary.csv
-  summary: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/summary.json
+  root: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1
+  resolved_protocol: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/input_manifest.json
+  run_log: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/run.log
+  games: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/games.jsonl
+  attempts: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/attempts.jsonl
+  evaluation_manifest: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/evaluation_manifest.json
+  checkpoint_pairs: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/checkpoint_pairs.csv
+  checkpoint_summary: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/checkpoint_summary.csv
+  summary: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/summary.json
 
 immutability:
   config_id_reuse_after_run_start: forbidden
@@ -45,14 +45,14 @@ input_integrity:
 
 conditions:
   contract: configs/matched_compute_v1.yaml
-  contract_sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
+  contract_sha256: 1947b3ab4918355ed1354248f679e344efd77be2f0c87a8ce3e22c85614246e6
   baseline_run_id: baseline_reproduction_seed1001_4090
   adaptive_run_id: adaptive_formal_seed1001_4090_v2
 
 model_selection:
   baseline: final_checkpoint_at_common_horizon
   adaptive: final_checkpoint_at_common_horizon
-  common_horizon_source: matched_compute.compute_budget.common_horizon
+  common_horizon_source: matched_compute.pairing_and_randomness.checkpoint_grid.targets[-1].gpu_hours
   checkpoint_rule: latest_completed_checkpoint_not_after_common_horizon
   allow_best_checkpoint: false
   allow_outcome_based_substitution: false

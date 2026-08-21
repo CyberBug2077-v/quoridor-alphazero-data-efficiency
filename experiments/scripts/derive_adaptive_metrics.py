@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+import yaml
+
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 EXPERIMENTS_ROOT = SOURCE_ROOT / "experiments"
@@ -39,7 +41,7 @@ DEFAULT_RUN_DIR = (
 DEFAULT_OUTPUT_DIR = (
     EXPERIMENTS_ROOT / "outputs" / "adaptive_seed1001_4090_v2_analysis"
 )
-DEFAULT_H2_COMMON_HORIZON_ITERATION = 180
+DEFAULT_MATCHED_COMPUTE = EXPERIMENTS_ROOT / "configs" / "matched_compute_v1.yaml"
 
 DERIVED_FIELDS = (
     "fresh_states_per_update",
@@ -142,9 +144,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
-        "--h2-common-horizon-iteration",
-        type=int,
-        default=DEFAULT_H2_COMMON_HORIZON_ITERATION,
+        "--matched-compute",
+        type=Path,
+        default=DEFAULT_MATCHED_COMPUTE,
+        help="Protocol containing the Baseline GPU-hour checkpoint targets.",
     )
     return parser.parse_args(argv)
 
@@ -215,6 +218,64 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
         raise AdaptiveMetricDerivationError(f"invalid {label}: {exc}") from exc
     _require(isinstance(payload, dict), f"{label} must contain an object")
     return payload
+
+
+def _load_yaml(path: Path, label: str) -> dict[str, Any]:
+    _require(path.is_file(), f"missing {label}: {path}")
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise AdaptiveMetricDerivationError(f"invalid {label}: {exc}") from exc
+    _require(isinstance(payload, dict), f"{label} must contain a mapping")
+    return payload
+
+
+def _common_horizon_target(matched_compute_path: Path) -> float:
+    protocol = _load_yaml(matched_compute_path, "matched-compute protocol")
+    try:
+        targets = protocol["pairing_and_randomness"]["checkpoint_grid"]["targets"]
+        maximum_gpu_hours = protocol["compute_budget"]["common_horizon"][
+            "maximum_gpu_hours"
+        ]
+    except (KeyError, TypeError) as exc:
+        raise AdaptiveMetricDerivationError(
+            "matched-compute protocol is missing checkpoint targets or the "
+            "common-horizon maximum"
+        ) from exc
+    _require(isinstance(targets, list) and bool(targets), "checkpoint targets are empty")
+    gpu_hour_targets: list[float] = []
+    for index, target in enumerate(targets):
+        _require(isinstance(target, dict), f"checkpoint target {index} is invalid")
+        value = target.get("gpu_hours")
+        _require(
+            _is_finite_number(value) and float(value) >= 0.0,
+            f"checkpoint target {index} has invalid gpu_hours",
+        )
+        gpu_hour_targets.append(float(value))
+    _require(
+        _is_finite_number(maximum_gpu_hours) and float(maximum_gpu_hours) > 0.0,
+        "common-horizon maximum_gpu_hours must be finite and > 0",
+    )
+    return min(max(gpu_hour_targets), float(maximum_gpu_hours))
+
+
+def _select_horizon_iteration(
+    records: list[dict[str, Any]], common_horizon_gpu_hours: float
+) -> int:
+    _require(
+        _is_finite_number(common_horizon_gpu_hours)
+        and common_horizon_gpu_hours > 0.0,
+        "common horizon must be finite and > 0 GPU-hours",
+    )
+    eligible = [
+        int(record["iteration"])
+        for record in records
+        if _is_integer(record.get("iteration"))
+        and _is_finite_number(record.get("cumulative_gpu_hours"))
+        and float(record["cumulative_gpu_hours"]) <= common_horizon_gpu_hours
+    ]
+    _require(bool(eligible), "no completed Adaptive iteration is within the horizon")
+    return max(eligible)
 
 
 def _weighted_quantile(age_weights: list[tuple[int, int]], quantile: float) -> int:
@@ -408,7 +469,9 @@ def _annotate_replay_rows(
     return annotated
 
 
-def _input_evidence(verified: VerifiedRun) -> dict[str, dict[str, Any]]:
+def _input_evidence(
+    verified: VerifiedRun, matched_compute_path: Path
+) -> dict[str, dict[str, Any]]:
     run_dir = verified.run_dir
     latest_path = run_dir / "recovery" / "latest_commit.json"
     latest = _load_json(latest_path, "latest recovery pointer")
@@ -452,6 +515,11 @@ def _input_evidence(verified: VerifiedRun) -> dict[str, dict[str, Any]]:
             "sha256": str(replay_entry.get("sha256", "")),
             "verification": "matched recovery commit manifest",
         },
+        "matched_compute": {
+            "path": matched_compute_path.as_posix(),
+            "sha256": sha256_file(matched_compute_path),
+            "verification": "parsed as the common-horizon target source",
+        },
     }
 
 
@@ -463,6 +531,7 @@ def _build_replay_summary(
     iteration_rows: list[dict[str, Any]],
     trajectory_rows: list[dict[str, Any]],
     h2_common_horizon_iteration: int,
+    h2_common_horizon_gpu_hours: float,
     output_dir: Path,
 ) -> dict[str, Any]:
     left_censored = [
@@ -484,7 +553,11 @@ def _build_replay_summary(
             "empty_buckets": raw["empty_buckets"],
         },
         "h2_scope": {
+            "common_horizon_gpu_hours": h2_common_horizon_gpu_hours,
             "common_horizon_iteration": h2_common_horizon_iteration,
+            "selection_rule": (
+                "max(iteration where cumulative_gpu_hours <= common_horizon_gpu_hours)"
+            ),
             "beyond_common_horizon_rule": (
                 "iteration > common_horizon_iteration"
             ),
@@ -551,6 +624,7 @@ def _quality_report(
     replay_iteration_rows: list[dict[str, Any]],
     replay_trajectory_rows: list[dict[str, Any]],
     h2_common_horizon_iteration: int,
+    h2_common_horizon_gpu_hours: float,
     output_paths: dict[str, Path],
 ) -> dict[str, Any]:
     completed_iterations = len(verified.metrics)
@@ -595,14 +669,13 @@ def _quality_report(
             and bool(replay_summary["validations"]["no_empty_games"])
             and bool(replay_summary["validations"]["no_trajectory_anomalies"])
         ),
-        "incoming_ratio_left_censored_only_at_iteration_66": (
-            expected_replay_start == 66 and left_censored == [66]
+        "incoming_ratio_left_censored_only_at_replay_window_start": (
+            left_censored == [expected_replay_start]
         ),
-        "iterations_after_180_marked_beyond_h2_common_horizon": (
-            h2_common_horizon_iteration == 180
-            and all(
+        "iterations_after_selected_horizon_marked_beyond_h2_common_horizon": (
+            all(
                 row["beyond_h2_common_horizon"]
-                == (int(row["iteration"]) > 180)
+                == (int(row["iteration"]) > h2_common_horizon_iteration)
                 for row in (
                     derived_rows + replay_iteration_rows + replay_trajectory_rows
                 )
@@ -644,7 +717,11 @@ def _quality_report(
             "replay_trajectory_rows": len(replay_trajectory_rows),
         },
         "h2_scope": {
+            "common_horizon_gpu_hours": h2_common_horizon_gpu_hours,
             "common_horizon_iteration": h2_common_horizon_iteration,
+            "selection_rule": (
+                "max(iteration where cumulative_gpu_hours <= common_horizon_gpu_hours)"
+            ),
             "left_censored_incoming_ratio_iterations": left_censored,
             "beyond_common_horizon_iterations": [
                 row["iteration"]
@@ -671,10 +748,11 @@ def derive_adaptive_metrics(
     run_dir: Path,
     output_dir: Path,
     *,
-    h2_common_horizon_iteration: int = DEFAULT_H2_COMMON_HORIZON_ITERATION,
+    matched_compute_path: Path = DEFAULT_MATCHED_COMPUTE,
 ) -> tuple[dict[str, Path], dict[str, Any]]:
     run_dir = run_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
+    matched_compute_path = matched_compute_path.expanduser().resolve()
     verified = verify_run(run_dir)
     _require(verified.completed, "Adaptive run is verified but not completed")
     resolved = verified.resolved
@@ -684,13 +762,17 @@ def derive_adaptive_metrics(
     allocated_gpu_count = int(
         resolved["resource_accounting"]["allocated_gpu_count"]
     )
+    h2_common_horizon_gpu_hours = _common_horizon_target(matched_compute_path)
+    h2_common_horizon_iteration = _select_horizon_iteration(
+        verified.metrics, h2_common_horizon_gpu_hours
+    )
     derived_rows = _derive_metric_rows(
         verified.metrics,
         history_iterations=history_iterations,
         allocated_gpu_count=allocated_gpu_count,
         h2_common_horizon_iteration=h2_common_horizon_iteration,
     )
-    input_evidence = _input_evidence(verified)
+    input_evidence = _input_evidence(verified, matched_compute_path)
 
     replay_path = verified.recovery_artifacts["replay"]
     gc.collect()
@@ -733,6 +815,7 @@ def derive_adaptive_metrics(
         iteration_rows=replay_iteration_rows,
         trajectory_rows=replay_trajectory_rows,
         h2_common_horizon_iteration=h2_common_horizon_iteration,
+        h2_common_horizon_gpu_hours=h2_common_horizon_gpu_hours,
         output_dir=replay_output_dir,
     )
 
@@ -767,6 +850,7 @@ def derive_adaptive_metrics(
         replay_iteration_rows=replay_iteration_rows,
         replay_trajectory_rows=replay_trajectory_rows,
         h2_common_horizon_iteration=h2_common_horizon_iteration,
+        h2_common_horizon_gpu_hours=h2_common_horizon_gpu_hours,
         output_paths=output_paths,
     )
     quality_path = output_dir / "data_quality_report.json"
@@ -779,7 +863,7 @@ def _write_failure_report(
     output_dir: Path,
     run_dir: Path,
     error: Exception,
-    h2_common_horizon_iteration: int,
+    matched_compute_path: Path,
 ) -> Path:
     path = output_dir.expanduser().resolve() / "data_quality_report.json"
     payload = {
@@ -787,7 +871,7 @@ def _write_failure_report(
         "status": "failed",
         "run_dir": run_dir.expanduser().resolve().as_posix(),
         "h2_scope": {
-            "common_horizon_iteration": h2_common_horizon_iteration,
+            "matched_compute": matched_compute_path.expanduser().resolve().as_posix(),
             "h2_decision_performed": False,
         },
         "findings": [
@@ -809,7 +893,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_paths, quality = derive_adaptive_metrics(
             args.run_dir,
             args.output_dir,
-            h2_common_horizon_iteration=args.h2_common_horizon_iteration,
+            matched_compute_path=args.matched_compute,
         )
     except (
         AdaptiveMetricDerivationError,
@@ -824,7 +908,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output_dir,
             args.run_dir,
             exc,
-            args.h2_common_horizon_iteration,
+            args.matched_compute,
         )
         print(f"Adaptive metric derivation failed: {exc}", file=sys.stderr)
         print(f"Data quality: {quality_path}", file=sys.stderr)

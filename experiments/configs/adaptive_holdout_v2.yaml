@@ -1,0 +1,95 @@
+schema_version: 1
+config_id: adaptive_holdout_v2
+status: frozen
+
+revision:
+  supersedes: adaptive_holdout_v1
+  reason: evaluate the completed adaptive v2 run against the matched-compute grid
+
+outputs:
+  root: outputs/adaptive_seed1001_4090_v2_analysis/holdout_v2
+  resolved_protocol: outputs/adaptive_seed1001_4090_v2_analysis/holdout_v2/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_v2_analysis/holdout_v2/input_manifest.json
+  evaluation_manifest: outputs/adaptive_seed1001_4090_v2_analysis/holdout_v2/evaluation_manifest.json
+  checkpoint_metrics: outputs/adaptive_seed1001_4090_v2_analysis/holdout_v2/checkpoint_metrics.csv
+  trajectory_checkpoint_metrics: outputs/adaptive_seed1001_4090_v2_analysis/holdout_v2/trajectory_checkpoint_metrics.csv
+  summary: outputs/adaptive_seed1001_4090_v2_analysis/holdout_v2/summary.json
+  evaluation_log: outputs/adaptive_seed1001_4090_v2_analysis/holdout_v2/evaluation.log
+
+input_integrity:
+  algorithm: sha256
+  required_for:
+    - holdout_dataset
+    - holdout_manifest
+    - source_protocol
+    - evaluated_checkpoints
+    - protocol_configs
+
+source_protocol:
+  config: ../baseline/analysis/configs/holdout_v1.yaml
+  protocol_id: fixed_holdout_v1
+  expected_sha256: 039089f45b36a508d37a0c5e82542370489d0fa47b7971c809ba063935a0faa2
+
+holdout:
+  protocol_id: fixed_holdout_v1
+  dataset_path: ../baseline/outputs/baseline_seed1001_4090_analysis/holdout_v1/states.npz
+  manifest_path: ../baseline/outputs/baseline_seed1001_4090_analysis/holdout_v1/manifest.json
+  manifest_sha256: c2e0b57a9ef4733fe59a1d8d3ee01fbb70a2241f24f92ebb33f04c152a604ef3
+  expected_games: 200
+  expected_states: 9259
+  expected_content_sha256: 33d77cab4fd08bbad5b66c5ef7e9f359a1aacfbc078f440fe180385228879194
+  expected_file_sha256: 1504cd503870f39b5e40d4ed1285bf392b22a75c375d00d23c7b669172fad863
+  read_only: true
+  excluded_from_replay: true
+
+evaluated_condition:
+  run_id: adaptive_formal_seed1001_4090_v2
+  run_root: outputs/adaptive_formal_seed1001_4090_v2
+  checkpoint_manifest: outputs/adaptive_formal_seed1001_4090_v2/checkpoint_manifest.json
+  training_metrics: outputs/adaptive_formal_seed1001_4090_v2/metrics.jsonl
+
+checkpoint_alignment:
+  contract: configs/matched_compute_v1.yaml
+  contract_sha256: 1947b3ab4918355ed1354248f679e344efd77be2f0c87a8ce3e22c85614246e6
+  target_source: pairing_and_randomness.checkpoint_grid.targets
+  expected_target_count: 12
+  axis: gpu_hours
+  selection: latest_completed_checkpoint_not_after_target
+  model_parameter_interpolation: none
+  metric_interpolation: none
+  duplicate_selected_checkpoint: evaluate_once_and_map_to_each_target
+  checkpoint_0:
+    path: ../baseline/outputs/pretraining_reproduction_seed1001/checkpoints/checkpoint_0.pth.tar
+    actual_gpu_hours: 0.0
+    sha256: 4824a2a8ba1c1ebb5a38a992af075a45a033b87b403973b583ab98a079f35667
+
+evaluation:
+  model_inference_only: true
+  batch_size: 1024
+  bootstrap_resamples: 10000
+  bootstrap_seed: 72001
+  bootstrap_seed_per_checkpoint: bootstrap_seed + actual_checkpoint_iteration
+  confidence_level: 0.95
+  loss_implementation: ../baseline/analysis/scripts/evaluate_holdout.py
+  loss_definition:
+    policy_loss: training-valid-action-masked cross entropy
+    value_loss: mean squared error
+    total_loss: policy_loss + value_loss
+  confidence_interval:
+    method: nonparametric_cluster_bootstrap
+    cluster: complete_holdout_game_trajectory
+    draw: resample_200_games_with_replacement
+  train_holdout_alignment:
+    join_key: actual_checkpoint_iteration
+    checkpoint_0_training_loss: null
+    unmatched_training_iteration: fail_evaluation
+  approximate_gaps:
+    approx_policy_gap: holdout_policy_loss - logged_train_policy_loss
+    approx_value_gap: holdout_value_loss - logged_train_value_loss
+    approx_total_gap: holdout_total_loss - logged_train_total_loss
+
+missing_values:
+  non_finite_metric: fail_evaluation
+  missing_checkpoint: fail_evaluation
+  imputation: none
+  interpolation: none

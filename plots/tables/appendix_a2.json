@@ -1,0 +1,109 @@
+{
+  "model_architecture": {
+    "board_size": 9,
+    "num_channels": 128,
+    "num_res_blocks": 6,
+    "attn_depth": 1,
+    "num_heads": 8,
+    "dropout": 0.3,
+    "se_enabled": false
+  },
+  "pretraining": {
+    "dataset_sha256": "a8ab71e26f6835168abb297258664838527c6a3d6a206c2457732e8cdbc5b34e",
+    "seed": 1001,
+    "epochs": 10,
+    "batch_size": 2048,
+    "micro_batch_size": 1024,
+    "learning_rate": 0.0005,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "precision": {
+      "amp_enabled": true,
+      "dtype": "bf16"
+    }
+  },
+  "online_baseline": {
+    "seed": 1001,
+    "self_play": {
+      "iterations": 210,
+      "games_per_iteration": 75,
+      "mcts_simulations": 200,
+      "eval_mcts_in_batch": 10,
+      "cpuct": 1.25,
+      "temperature_threshold": 15,
+      "dirichlet_noise": true,
+      "dirichlet_alpha": 0.15,
+      "dirichlet_epsilon": 0.25,
+      "max_game_length": 150
+    },
+    "training": {
+      "epochs": 4,
+      "batch_size": 2048,
+      "micro_batch_size": 2048,
+      "optimizer": "adamw",
+      "learning_rate": 0.0002,
+      "weight_decay": 0.0001,
+      "gradient_clip": 1.0,
+      "precision": {
+        "amp_enabled": true,
+        "dtype": "bf16"
+      }
+    },
+    "adaptive_scheduler": {
+      "method": "target_states",
+      "baseline_games": 75,
+      "target_states": 2516,
+      "target_calibration": {
+        "window_iterations": [
+          1,
+          40
+        ],
+        "statistic": "pooled_mean_game_length"
+      },
+      "length_estimator": {
+        "method": "ema",
+        "alpha": 0.25,
+        "minimum_observations": 20,
+        "observation_statistic": "mean_valid_completed_game_length"
+      },
+      "warm_start": {
+        "first_iteration_games": 75,
+        "initial_length_value": 33.5363333333333
+      },
+      "bounds": {
+        "min_games": 50,
+        "max_games": 150
+      },
+      "max_valid_game_length": 150,
+      "rounding": "ceil",
+      "update_frequency": "once_per_iteration",
+      "update_timing": "after_iteration_is_complete_before_next_iteration_is_started",
+      "clipping": "after_rounding",
+      "observation_policy": {
+        "accepted": "structurally_valid_nonempty_games_with_length_1_to_150",
+        "truncated_at_max_length": "include_for_scheduler_and_record_separately",
+        "empty_game": "exclude_and_record",
+        "malformed_game": "exclude_and_record",
+        "abnormal_length": "exclude_and_record"
+      },
+      "estimator_guard_policy": {
+        "fewer_than_20_valid_games": "keep_previous_estimator_and_next_game_plan",
+        "non_finite_estimator": "fail_run"
+      }
+    }
+  },
+  "replay_and_checkpointing": {
+    "replay": {
+      "max_queue_size": 500000,
+      "max_train_samples": 200000,
+      "history_iterations": 150
+    },
+    "checkpoint": {
+      "save_every_iterations": 10,
+      "save_replay_state": true,
+      "save_instrumentation_state": true,
+      "save_rng_state": true,
+      "save_scheduler_state": true
+    }
+  }
+}

@@ -13,16 +13,16 @@ provenance:
   require_clean_worktree: true
 
 outputs:
-  root: outputs/adaptive_seed1001_4090_analysis/h3_v1
-  resolved_protocol: outputs/adaptive_seed1001_4090_analysis/h3_v1/resolved_config.yaml
-  input_manifest: outputs/adaptive_seed1001_4090_analysis/h3_v1/input_manifest.json
-  run_log: outputs/adaptive_seed1001_4090_analysis/h3_v1/run.log
-  aligned_strength: outputs/adaptive_seed1001_4090_analysis/h3_v1/aligned_strength.csv
-  utility_curve: outputs/adaptive_seed1001_4090_analysis/h3_v1/utility_curve.csv
-  effects: outputs/adaptive_seed1001_4090_analysis/h3_v1/effects.csv
-  input_audit: outputs/adaptive_seed1001_4090_analysis/h3_v1/input_audit.json
-  decision: outputs/adaptive_seed1001_4090_analysis/h3_v1/decision.json
-  summary: outputs/adaptive_seed1001_4090_analysis/h3_v1/summary.json
+  root: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1
+  resolved_protocol: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/input_manifest.json
+  run_log: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/run.log
+  aligned_strength: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/aligned_strength.csv
+  utility_curve: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/utility_curve.csv
+  effects: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/effects.csv
+  input_audit: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/input_audit.json
+  decision: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/decision.json
+  summary: outputs/adaptive_seed1001_4090_v2_analysis/h3_v1/summary.json
 
 immutability:
   config_id_reuse_after_run_start: forbidden
@@ -60,7 +60,7 @@ hypothesis:
 inputs:
   matched_compute:
     path: configs/matched_compute_v1.yaml
-    sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
+    sha256: 1947b3ab4918355ed1354248f679e344efd77be2f0c87a8ce3e22c85614246e6
   baseline_fixed_basket_records:
     path: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
     sha256: 228b088fd09bf584e424fb5d81eb3309d7496316cb15d6e9bae7baf2d1b95425
@@ -69,41 +69,41 @@ inputs:
     sha256: 44f528e10907572637c361e48b25649f36c5480f77ff79bf36eba89503074155
   adaptive_fixed_basket_protocol:
     path: configs/adaptive_fixed_basket_v1.yaml
-    sha256: 933081b02adfcce2a29ca0263f97f1357ce57bb2e195d9850f6b7140f2ceccd9
+    sha256: 3260603d9e9e7b19d8d946aa3e14b1b1ea94d35b009af19773248ad182a94c2e
   adaptive_fixed_basket_records:
-    path: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+    path: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/games.jsonl
     sha256: null
     sha256_required_in_input_manifest: true
   adaptive_fixed_basket_checkpoint_summary:
-    path: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
+    path: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/checkpoint_summary.csv
     sha256: null
     sha256_required_in_input_manifest: true
   joint_elo_summary:
-    path: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/joint_elo_summary.csv
+    path: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/joint_elo_summary.csv
     sha256: null
     sha256_required_in_input_manifest: true
   head_to_head_protocol:
     path: configs/head_to_head_v1.yaml
-    sha256: 9b2f222796e9cf0a7b55c1a95c7aeb7a65d835f999d9bacf83bab68ebb7750ca
+    sha256: 403c40e117dbafa45a6674ef47e5f3f24a7e126623f496b3cc3f2dfee7b09b94
   head_to_head_records:
-    path: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/games.jsonl
+    path: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/games.jsonl
     sha256: null
     sha256_required_in_input_manifest: true
   head_to_head_summary:
-    path: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/summary.json
+    path: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v1/summary.json
     sha256: null
     sha256_required_in_input_manifest: true
   h2_protocol:
     path: configs/h2_v1.yaml
-    sha256: 17e65ac25f9853f3bdf5fdc4cdcaf81950450d9e4384100db1714bdfd4ea5522
+    sha256: db9b02a5c97ffa6f09f6bf44667572a659e5e574657f68faae88e47be8b1be14
   h2_decision:
-    path: outputs/adaptive_seed1001_4090_analysis/h2_v1/decision.json
+    path: outputs/adaptive_seed1001_4090_v2_analysis/h2_v1/decision.json
     sha256: null
     sha256_required_in_input_manifest: true
 
 gpu_hour_alignment:
-  common_horizon: minimum_available_gpu_hours_capped_at_24
-  source: matched_compute.compute_budget.common_horizon
+  common_horizon: final_checkpoint_grid_target_capped_by_compute_budget_common_horizon
+  source: matched_compute.pairing_and_randomness.checkpoint_grid.targets[-1].gpu_hours
   x_coordinate: matched_baseline_reference_gpu_hour_target
   checkpoint_selection: latest_completed_checkpoint_not_after_target
   require_same_targets_for_baseline_and_adaptive: true

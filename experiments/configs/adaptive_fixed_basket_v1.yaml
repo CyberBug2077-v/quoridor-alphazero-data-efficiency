@@ -13,18 +13,18 @@ provenance:
   require_clean_worktree: true
 
 outputs:
-  root: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1
-  resolved_protocol: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/resolved_config.yaml
-  input_manifest: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/input_manifest.json
-  run_log: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/evaluation.log
-  evaluation_manifest: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/evaluation_manifest.json
-  games: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
-  checkpoint_summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
-  opponent_summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/opponent_summary.csv
-  provisional_elo_summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/elo_summary.csv
-  joint_elo_summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/joint_elo_summary.csv
-  summary: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/summary.json
-  evaluation_log: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/evaluation.log
+  root: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1
+  resolved_protocol: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/input_manifest.json
+  run_log: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/evaluation.log
+  evaluation_manifest: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/evaluation_manifest.json
+  games: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/games.jsonl
+  checkpoint_summary: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/checkpoint_summary.csv
+  opponent_summary: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/opponent_summary.csv
+  provisional_elo_summary: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/elo_summary.csv
+  joint_elo_summary: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/joint_elo_summary.csv
+  summary: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/summary.json
+  evaluation_log: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/evaluation.log
 
 immutability:
   config_id_reuse_after_run_start: forbidden
@@ -61,7 +61,7 @@ evaluated_condition:
 
 checkpoint_alignment:
   contract: configs/matched_compute_v1.yaml
-  contract_sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
+  contract_sha256: 1947b3ab4918355ed1354248f679e344efd77be2f0c87a8ce3e22c85614246e6
   axis: gpu_hours
   matched_gpu_hour_targets:
     - baseline_checkpoint_iteration: 0
@@ -224,7 +224,7 @@ joint_elo:
     baseline_evaluation_manifest:
       path: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/evaluation_manifest.json
       sha256: 54226d9d3d919e89621ee1fd3292f41f2ccdc4d1f5846d6cde0985f4ff2f2db2
-    adaptive_games: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+    adaptive_games: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v1/games.jsonl
   participants:
     - baseline_matched_checkpoints
     - adaptive_matched_checkpoints

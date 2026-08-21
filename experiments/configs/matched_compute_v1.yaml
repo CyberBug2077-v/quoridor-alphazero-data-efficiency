@@ -48,11 +48,11 @@ conditions:
     metrics: ../baseline/outputs/baseline_reproduction_seed1001_4090/metrics.jsonl
     metrics_sha256: 5e9a8795b7ee27706eb9db42a675c59ed72147bc8261f714245020887bb4db4f
   adaptive:
-    run_id: adaptive_formal_seed1001_4090
-    formal_config: configs/adaptive_formal_v1.yaml
-    resolved_config: outputs/adaptive_formal_seed1001_4090/resolved_config.yaml
-    run_metadata: outputs/adaptive_formal_seed1001_4090/run_metadata.json
-    metrics: outputs/adaptive_formal_seed1001_4090/metrics.jsonl
+    run_id: adaptive_formal_seed1001_4090_v2
+    formal_config: configs/adaptive_formal_v2.yaml
+    resolved_config: outputs/adaptive_formal_seed1001_4090_v2/resolved_config.yaml
+    run_metadata: outputs/adaptive_formal_seed1001_4090_v2/run_metadata.json
+    metrics: outputs/adaptive_formal_seed1001_4090_v2/metrics.jsonl
 
 common_initialization:
   mode: pretrained_checkpoint

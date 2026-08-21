@@ -86,3 +86,33 @@ def test_annotates_unique_ratio_and_h2_scope_without_changing_left_censor() -> N
     assert annotated[0]["incoming_ratio_left_censored"] is True
     assert annotated[0]["beyond_h2_common_horizon"] is False
     assert annotated[1]["beyond_h2_common_horizon"] is True
+
+
+def test_selects_last_completed_iteration_not_after_matched_compute_target(
+    tmp_path: Path,
+) -> None:
+    matched_compute = tmp_path / "matched_compute.yaml"
+    matched_compute.write_text(
+        """
+compute_budget:
+  common_horizon:
+    maximum_gpu_hours: 24
+pairing_and_randomness:
+  checkpoint_grid:
+    targets:
+      - gpu_hours: 0.0
+      - gpu_hours: 20.004163361943395
+""".lstrip(),
+        encoding="utf-8",
+    )
+    records = [
+        {"iteration": 178, "cumulative_gpu_hours": 19.8},
+        {"iteration": 179, "cumulative_gpu_hours": 19.903170},
+        {"iteration": 180, "cumulative_gpu_hours": 20.019666},
+    ]
+
+    target = derive._common_horizon_target(matched_compute)
+    selected = derive._select_horizon_iteration(records, target)
+
+    assert target == pytest.approx(20.004163361943395)
+    assert selected == 179
