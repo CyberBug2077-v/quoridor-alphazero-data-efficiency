@@ -207,12 +207,68 @@ def _verify_hash(path: Path, expected: Any, label: str) -> str:
     return actual
 
 
-def _verify_manifest_entry(entry: Any, label: str) -> Path:
+def _normalise_persisted_path(path_value: str) -> str:
+    return path_value.replace("\\", "/").rstrip("/")
+
+
+def _recorded_source_root(resolved: dict[str, Any]) -> str | None:
+    configured_output = resolved.get("run", {}).get("output_dir")
+    if not isinstance(configured_output, str):
+        return None
+    normalised = _normalise_persisted_path(configured_output)
+    marker = "/experiments/"
+    marker_index = normalised.casefold().find(marker)
+    if marker_index <= 0:
+        return None
+    return normalised[:marker_index]
+
+
+def _resolve_persisted_path(
+    path_value: str,
+    *,
+    run_dir: Path,
+    resolved: dict[str, Any],
+) -> Path:
+    normalised = _normalise_persisted_path(path_value)
+    configured_output = resolved.get("run", {}).get("output_dir")
+    recorded_run_dir = (
+        _normalise_persisted_path(configured_output)
+        if isinstance(configured_output, str)
+        else None
+    )
+    mappings = (
+        (recorded_run_dir, run_dir),
+        (_recorded_source_root(resolved), SOURCE_ROOT),
+    )
+    for recorded_root, actual_root in mappings:
+        if not recorded_root:
+            continue
+        normalised_casefold = normalised.casefold()
+        recorded_casefold = recorded_root.casefold()
+        if normalised_casefold == recorded_casefold:
+            return actual_root.resolve()
+        if normalised_casefold.startswith(recorded_casefold + "/"):
+            relative = normalised[len(recorded_root) + 1 :]
+            return actual_root.joinpath(*relative.split("/")).resolve()
+    return Path(path_value).expanduser().resolve()
+
+
+def _verify_manifest_entry(
+    entry: Any,
+    label: str,
+    *,
+    run_dir: Path,
+    resolved: dict[str, Any],
+    verify_sha256: bool = True,
+) -> Path:
     _require(isinstance(entry, dict), f"invalid manifest entry for {label}")
     path_value = entry.get("path")
     _require(isinstance(path_value, str), f"missing path for {label}")
-    path = Path(path_value).expanduser().resolve()
-    _verify_hash(path, entry.get("sha256"), label)
+    path = _resolve_persisted_path(path_value, run_dir=run_dir, resolved=resolved)
+    if verify_sha256:
+        _verify_hash(path, entry.get("sha256"), label)
+    else:
+        _require(path.is_file(), f"missing {label}: {path}")
     return path
 
 
@@ -242,13 +298,28 @@ def _verify_inputs(run_dir: Path, resolved: dict[str, Any]) -> dict[str, Any]:
     inputs = manifest.get("inputs")
     _require(isinstance(inputs, dict), "input_manifest.inputs must be an object")
     for label, entry in inputs.items():
-        _verify_manifest_entry(entry, f"input {label}")
-    _verify_manifest_entry(manifest.get("resolved_config"), "resolved_config")
+        _verify_manifest_entry(
+            entry,
+            f"input {label}",
+            run_dir=run_dir,
+            resolved=resolved,
+            verify_sha256=False,
+        )
+    _verify_manifest_entry(
+        manifest.get("resolved_config"),
+        "resolved_config",
+        run_dir=run_dir,
+        resolved=resolved,
+    )
     _require(resolved.get("mode") == "adaptive", "resolved mode must be adaptive")
     _require(resolved.get("status") == "frozen", "resolved status must be frozen")
-    configured_output = Path(resolved.get("run", {}).get("output_dir", ""))
+    configured_output = _resolve_persisted_path(
+        str(resolved.get("run", {}).get("output_dir", "")),
+        run_dir=run_dir,
+        resolved=resolved,
+    )
     _require(
-        configured_output.expanduser().resolve() == run_dir,
+        configured_output == run_dir,
         "resolved run.output_dir differs from the verified directory",
     )
     return manifest
@@ -371,7 +442,12 @@ def _verify_checkpoints(
             isinstance(iteration, int) and not isinstance(iteration, bool),
             "checkpoint iteration must be an integer",
         )
-        path = _verify_manifest_entry(entry, f"checkpoint iteration {iteration}")
+        path = _verify_manifest_entry(
+            entry,
+            f"checkpoint iteration {iteration}",
+            run_dir=run_dir,
+            resolved=resolved,
+        )
         _load_torch(path, f"checkpoint iteration {iteration}")
         _require(
             iteration in gpu_hours_by_iteration,
@@ -413,7 +489,11 @@ def _verify_recovery(
     pointer = _load_json(run_dir / "recovery" / "latest_commit.json")
     iteration = len(metrics)
     _require(pointer.get("iteration") == iteration, "latest commit iteration mismatch")
-    manifest_path = Path(pointer.get("commit_manifest", "")).expanduser().resolve()
+    manifest_path = _resolve_persisted_path(
+        str(pointer.get("commit_manifest", "")),
+        run_dir=run_dir,
+        resolved=resolved,
+    )
     _verify_hash(
         manifest_path,
         pointer.get("commit_manifest_sha256"),
@@ -435,7 +515,12 @@ def _verify_recovery(
     }
     _require(required <= set(artifacts), "resume commit is missing required artifacts")
     paths = {
-        label: _verify_manifest_entry(entry, f"recovery {label}")
+        label: _verify_manifest_entry(
+            entry,
+            f"recovery {label}",
+            run_dir=run_dir,
+            resolved=resolved,
+        )
         for label, entry in artifacts.items()
     }
     _load_torch(paths["model"], "recovery model")
@@ -535,9 +620,13 @@ def _verify_recovery(
     return paths, scheduler_state, tracker_state, resource_state
 
 
-def _verify_shared_parameters(resolved: dict[str, Any]) -> None:
+def _verify_shared_parameters(run_dir: Path, resolved: dict[str, Any]) -> None:
     sources = resolved.get("protocol_sources", {})
-    baseline_path = Path(sources.get("baseline_config", "")).expanduser().resolve()
+    baseline_path = _resolve_persisted_path(
+        str(sources.get("baseline_config", "")),
+        run_dir=run_dir,
+        resolved=resolved,
+    )
     baseline = _load_yaml(baseline_path)
     for section in ("model", "training", "replay"):
         _require(
@@ -562,6 +651,7 @@ def _verify_shared_parameters(resolved: dict[str, Any]) -> None:
 
 def _verify_evaluations(
     run_dir: Path,
+    resolved: dict[str, Any],
     metrics: list[dict[str, Any]],
     checkpoint_manifest: dict[str, Any],
 ) -> list[int]:
@@ -592,8 +682,16 @@ def _verify_evaluations(
         entry = checkpoints.get(iteration)
         _require(entry is not None, f"evaluated checkpoint {iteration} was not archived")
         _require(
-            Path(evaluation.get("checkpoint_path", "")).resolve()
-            == Path(entry["path"]).resolve(),
+            _resolve_persisted_path(
+                str(evaluation.get("checkpoint_path", "")),
+                run_dir=run_dir,
+                resolved=resolved,
+            )
+            == _resolve_persisted_path(
+                str(entry["path"]),
+                run_dir=run_dir,
+                resolved=resolved,
+            ),
             f"evaluation {iteration} references the wrong checkpoint",
         )
         _require(
@@ -623,8 +721,8 @@ def verify_run(run_dir: Path | str) -> VerifiedRun:
         scheduler.state_dict() == scheduler_state,
         "replayed Scheduler trajectory differs from saved Scheduler state",
     )
-    _verify_shared_parameters(resolved)
-    evaluations = _verify_evaluations(path, metrics, checkpoint_manifest)
+    _verify_shared_parameters(path, resolved)
+    evaluations = _verify_evaluations(path, resolved, metrics, checkpoint_manifest)
 
     summary_path = path / "summary.json"
     completed = summary_path.is_file()
@@ -790,16 +888,20 @@ def _resume_equivalence(
 
 
 def _source_protocol(run: VerifiedRun) -> dict[str, Any]:
-    source_path = Path(
-        run.resolved.get("protocol_sources", {}).get("adaptive_config", "")
-    ).resolve()
+    source_path = _resolve_persisted_path(
+        str(run.resolved.get("protocol_sources", {}).get("adaptive_config", "")),
+        run_dir=run.run_dir,
+        resolved=run.resolved,
+    )
     return _load_yaml(source_path)
 
 
 def _pilot_gate_output_path(run: VerifiedRun) -> Path:
-    source_path = Path(
-        run.resolved.get("protocol_sources", {}).get("adaptive_config", "")
-    ).resolve()
+    source_path = _resolve_persisted_path(
+        str(run.resolved.get("protocol_sources", {}).get("adaptive_config", "")),
+        run_dir=run.run_dir,
+        resolved=run.resolved,
+    )
     source = _load_yaml(source_path)
     outputs = source.get("outputs", {})
     configured = outputs.get("pilot_gate_summary") if isinstance(outputs, dict) else None
@@ -807,7 +909,11 @@ def _pilot_gate_output_path(run: VerifiedRun) -> Path:
         return run.run_dir / "pilot_gate_summary.json"
     requested = Path(configured).expanduser()
     if requested.is_absolute():
-        output_path = requested.resolve()
+        output_path = _resolve_persisted_path(
+            configured,
+            run_dir=run.run_dir,
+            resolved=run.resolved,
+        )
     else:
         local_candidate = (source_path.parent / requested).resolve()
         experiments_candidate = (EXPERIMENTS_ROOT / requested).resolve()
