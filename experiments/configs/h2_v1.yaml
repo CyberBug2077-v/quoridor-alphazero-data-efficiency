@@ -66,7 +66,7 @@ inputs:
     path: ../baseline/outputs/baseline_reproduction_seed1001_4090/metrics.jsonl
     sha256: 5e9a8795b7ee27706eb9db42a675c59ed72147bc8261f714245020887bb4db4f
   adaptive_metrics:
-    path: outputs/adaptive_formal_seed1001_4090/metrics.jsonl
+    path: outputs/adaptive_formal_seed1001_4090_v2/metrics.jsonl
     sha256: null
     sha256_required_in_input_manifest: true
   baseline_replay_summary:
@@ -99,7 +99,7 @@ inputs:
     sha256_required_in_input_manifest: true
   adaptive_holdout_protocol:
     path: configs/adaptive_holdout_v1.yaml
-    sha256: 2826ce72ceb08c7c74e76aea244c738a2daf0660e060ed432dc652d22a6afcaf
+    sha256: 92af501c4909e47dcc0a07f77cbb33579d19ba72f47ee803df743bbe77b78195
   baseline_data_quality_report:
     path: ../baseline/outputs/baseline_reproduction_seed1001_4090/gate2/data_quality_report.json
     sha256: da2d9e6dfbad75b5941393805970e53e8a2944ba329bd303082caba8c71de300

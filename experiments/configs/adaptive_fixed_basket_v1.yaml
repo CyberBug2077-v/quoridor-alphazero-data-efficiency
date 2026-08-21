@@ -54,10 +54,10 @@ base_protocol:
   inheritance: exact_evaluation_settings
 
 evaluated_condition:
-  run_id: adaptive_formal_seed1001_4090
-  run_root: outputs/adaptive_formal_seed1001_4090
-  run_metadata: outputs/adaptive_formal_seed1001_4090/run_metadata.json
-  checkpoint_manifest: outputs/adaptive_formal_seed1001_4090/checkpoint_manifest.json
+  run_id: adaptive_formal_seed1001_4090_v2
+  run_root: outputs/adaptive_formal_seed1001_4090_v2
+  run_metadata: outputs/adaptive_formal_seed1001_4090_v2/run_metadata.json
+  checkpoint_manifest: outputs/adaptive_formal_seed1001_4090_v2/checkpoint_manifest.json
 
 checkpoint_alignment:
   contract: configs/matched_compute_v1.yaml
@@ -98,7 +98,7 @@ checkpoint_alignment:
   outcome_based_checkpoint_substitution: forbidden
 
 checkpoint_registry:
-  source: outputs/adaptive_formal_seed1001_4090/checkpoint_manifest.json
+  source: outputs/adaptive_formal_seed1001_4090_v2/checkpoint_manifest.json
   write_selected_registry_to: outputs.evaluation_manifest
   checkpoint_0:
     baseline_checkpoint_iteration: 0

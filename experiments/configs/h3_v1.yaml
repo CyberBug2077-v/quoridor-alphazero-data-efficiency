@@ -69,7 +69,7 @@ inputs:
     sha256: 44f528e10907572637c361e48b25649f36c5480f77ff79bf36eba89503074155
   adaptive_fixed_basket_protocol:
     path: configs/adaptive_fixed_basket_v1.yaml
-    sha256: f2efbf8d31af6b5fa69d006d8e037e7b79ca0ad0586d73e4963a5e020971fb1a
+    sha256: 933081b02adfcce2a29ca0263f97f1357ce57bb2e195d9850f6b7140f2ceccd9
   adaptive_fixed_basket_records:
     path: outputs/adaptive_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
     sha256: null
@@ -84,7 +84,7 @@ inputs:
     sha256_required_in_input_manifest: true
   head_to_head_protocol:
     path: configs/head_to_head_v1.yaml
-    sha256: ff4015d0aeea95f91c22fde4865b8b17443afd249894010f91a9138a3d4b695d
+    sha256: 9b2f222796e9cf0a7b55c1a95c7aeb7a65d835f999d9bacf83bab68ebb7750ca
   head_to_head_records:
     path: outputs/adaptive_seed1001_4090_analysis/head_to_head_v1/games.jsonl
     sha256: null
@@ -95,7 +95,7 @@ inputs:
     sha256_required_in_input_manifest: true
   h2_protocol:
     path: configs/h2_v1.yaml
-    sha256: 5b634bbc1126fe04eaf95a7a2004f5c75a5564d85f25605606aeaf0ed56ef1e1
+    sha256: 17e65ac25f9853f3bdf5fdc4cdcaf81950450d9e4384100db1714bdfd4ea5522
   h2_decision:
     path: outputs/adaptive_seed1001_4090_analysis/h2_v1/decision.json
     sha256: null

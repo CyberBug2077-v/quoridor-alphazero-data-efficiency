@@ -63,9 +63,9 @@ holdout:
   sample_selection_using_adaptive_results: forbidden
 
 evaluated_condition:
-  run_id: adaptive_formal_seed1001_4090
-  run_root: outputs/adaptive_formal_seed1001_4090
-  checkpoint_manifest: outputs/adaptive_formal_seed1001_4090/checkpoint_manifest.json
+  run_id: adaptive_formal_seed1001_4090_v2
+  run_root: outputs/adaptive_formal_seed1001_4090_v2
+  checkpoint_manifest: outputs/adaptive_formal_seed1001_4090_v2/checkpoint_manifest.json
 
 checkpoint_alignment:
   contract: configs/matched_compute_v1.yaml
@@ -117,7 +117,7 @@ checkpoint_alignment:
   duplicate_selected_checkpoint: evaluate_once_and_reference_same_result
 
 checkpoint_registry:
-  source: outputs/adaptive_formal_seed1001_4090/checkpoint_manifest.json
+  source: outputs/adaptive_formal_seed1001_4090_v2/checkpoint_manifest.json
   write_selected_registry_to: outputs.evaluation_manifest
   required_fields:
     - gpu_hour_target
@@ -158,7 +158,7 @@ evaluation:
     resamples: 10000
     confidence_level: 0.95
   train_holdout_alignment:
-    training_metrics: outputs/adaptive_formal_seed1001_4090/metrics.jsonl
+    training_metrics: outputs/adaptive_formal_seed1001_4090_v2/metrics.jsonl
     join_key: actual_checkpoint_iteration
     training_loss_source: same_iteration_logged_online_training_loss
     checkpoint_0_training_loss: null

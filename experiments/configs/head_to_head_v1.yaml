@@ -47,7 +47,7 @@ conditions:
   contract: configs/matched_compute_v1.yaml
   contract_sha256: f4fe272b1c4583bd1e7d98d35cc7c7d6e5039c6a7ef90ac61a0a463083f794f6
   baseline_run_id: baseline_reproduction_seed1001_4090
-  adaptive_run_id: adaptive_formal_seed1001_4090
+  adaptive_run_id: adaptive_formal_seed1001_4090_v2
 
 model_selection:
   baseline: final_checkpoint_at_common_horizon
