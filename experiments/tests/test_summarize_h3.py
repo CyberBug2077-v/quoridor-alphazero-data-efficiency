@@ -17,6 +17,7 @@ if str(SCRIPTS) not in sys.path:
 
 import summarize_h3 as h3
 from head_to_head_stats import colour_stratified_bootstrap
+from head_to_head_stats_v3 import seed_pair_bootstrap, trajectory_diversity
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -53,6 +54,99 @@ def test_v2_protocol_points_to_v2_evaluations_and_output() -> None:
     )
     assert config["inputs"]["h2_protocol"]["path"] == "configs/h2_v2.yaml"
     assert config["attribution"]["h3_decision_independent_of_h2_decision"] is True
+
+
+def test_v3_protocol_points_to_trajectory_audited_head_to_head() -> None:
+    config = yaml.safe_load(
+        (EXPERIMENTS / "configs" / "h3_v3.yaml").read_text(encoding="utf-8")
+    )
+
+    assert config["config_id"] == "h3_v3"
+    assert config["outputs"]["root"].endswith("/h3_v3")
+    assert config["inputs"]["head_to_head_protocol"]["path"] == (
+        "configs/head_to_head_v3.yaml"
+    )
+    assert config["inputs"]["head_to_head_records"]["path"].endswith(
+        "/head_to_head_v3/games.jsonl"
+    )
+    assert config["other_strength_metrics"]["final_head_to_head"][
+        "minimum_unique_trajectories_per_adaptive_colour"
+    ] == 2
+
+
+def _v3_head_records(*, diverse: bool) -> list[dict]:
+    records: list[dict] = []
+    for pair_index in range(50):
+        for colour in ("white", "black"):
+            variant = pair_index % 2 if diverse else 0
+            records.append(
+                {
+                    "stable_game_key": f"{pair_index}-{colour}",
+                    "seed_pair_index": pair_index,
+                    "game_seed": pair_index + 500,
+                    "adaptive_color": colour,
+                    "adaptive_result": "win" if colour == "white" else "draw",
+                    "technically_valid": True,
+                    "moves": [
+                        {
+                            "player": colour,
+                            "type": "pawn",
+                            "row": variant,
+                            "col": 4,
+                        }
+                    ],
+                }
+            )
+    return records
+
+
+def _v3_head_summary(records: list[dict]) -> dict:
+    interval = seed_pair_bootstrap(records, resamples=10000, seed=92001)
+    diversity = trajectory_diversity(records, minimum_unique_per_colour=2)
+    return {
+        "status": "completed",
+        "output_sha256": {"games": "f" * 64},
+        "checkpoint_selection": {
+            "best_checkpoint_selection_used": False,
+            "baseline": {"actual_gpu_hours": 20.0},
+            "adaptive": {"actual_gpu_hours": 19.9},
+        },
+        "trajectory_diversity": diversity,
+        "adaptive_score": {
+            "score_rate": interval["score_rate"],
+            "ci95_low": interval["ci95_low"],
+            "ci95_high": interval["ci95_high"],
+            "bootstrap": {
+                "method": "nonparametric_seed_pair_bootstrap",
+                "resamples": 10000,
+                "seed": 92001,
+                "preserve_seed_pairs": 50,
+            },
+        },
+    }
+
+
+def test_h3_v3_recomputes_paired_ci_and_rejects_duplicate_trajectories() -> None:
+    diverse = _v3_head_records(diverse=True)
+    interval = h3._validate_head_to_head(
+        diverse,
+        _v3_head_summary(diverse),
+        20.004163361943395,
+        "f" * 64,
+        2,
+    )
+
+    assert interval["method"] == "nonparametric_seed_pair_bootstrap"
+    assert interval["seed_pairs"] == 50
+    duplicated = _v3_head_records(diverse=False)
+    with pytest.raises(h3.H3Error, match="trajectory diversity failed"):
+        h3._validate_head_to_head(
+            duplicated,
+            _v3_head_summary(duplicated),
+            20.004163361943395,
+            "f" * 64,
+            2,
+        )
 
 
 def _make_complete_inputs(tmp_path: Path) -> Path:

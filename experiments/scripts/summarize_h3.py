@@ -19,6 +19,7 @@ from typing import Any, Callable, Sequence, TypeVar
 import yaml
 
 from head_to_head_stats import colour_stratified_bootstrap
+from head_to_head_stats_v3 import seed_pair_bootstrap, trajectory_diversity
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -596,7 +597,8 @@ def _validate_head_to_head(
     summary: dict[str, Any],
     horizon: float,
     records_sha256: str,
-) -> dict[str, float | int]:
+    minimum_unique_per_colour: int | None = None,
+) -> dict[str, Any]:
     _require(summary.get("status") == "completed", "head-to-head summary is not completed")
     output_hashes = summary.get("output_sha256")
     _require(isinstance(output_hashes, dict), "head-to-head summary output hashes are absent")
@@ -638,19 +640,52 @@ def _validate_head_to_head(
     _require(isinstance(adaptive_score, dict), "head-to-head adaptive_score summary is absent")
     bootstrap = adaptive_score.get("bootstrap")
     _require(isinstance(bootstrap, dict), "head-to-head bootstrap specification is absent")
-    interval = colour_stratified_bootstrap(
-        records,
-        resamples=int(bootstrap.get("resamples")),
-        seed=int(bootstrap.get("seed")),
-        expected_per_colour=int(bootstrap.get("preserve_games_per_colour")),
-    )
+    method = str(bootstrap.get("method", "nonparametric_stratified_bootstrap"))
+    if method == "nonparametric_seed_pair_bootstrap":
+        _require(
+            isinstance(minimum_unique_per_colour, int)
+            and minimum_unique_per_colour >= 2,
+            "H3 v3 trajectory-diversity minimum is invalid",
+        )
+        diversity = trajectory_diversity(
+            records,
+            minimum_unique_per_colour=minimum_unique_per_colour,
+        )
+        _require(
+            diversity.get("acceptance_passed") is True,
+            "head-to-head trajectory diversity failed",
+        )
+        _require(
+            summary.get("trajectory_diversity") == diversity,
+            "head-to-head trajectory-diversity summary is not reproducible",
+        )
+        interval = seed_pair_bootstrap(
+            records,
+            resamples=int(bootstrap.get("resamples")),
+            seed=int(bootstrap.get("seed")),
+            expected_pairs=int(bootstrap.get("preserve_seed_pairs")),
+        )
+    else:
+        _require(
+            method == "nonparametric_stratified_bootstrap",
+            f"unsupported head-to-head bootstrap method: {method}",
+        )
+        interval = colour_stratified_bootstrap(
+            records,
+            resamples=int(bootstrap.get("resamples")),
+            seed=int(bootstrap.get("seed")),
+            expected_per_colour=int(bootstrap.get("preserve_games_per_colour")),
+        )
     for result_field, summary_field in (
         ("score_rate", "score_rate"),
         ("ci95_low", "ci95_low"),
         ("ci95_high", "ci95_high"),
     ):
         _require(_close(float(interval[result_field]), _number(adaptive_score, summary_field)), f"head-to-head {summary_field} differs from an independent color-stratified bootstrap")
-    _require(int(interval["adaptive_white_games"]) == int(interval["adaptive_black_games"]) == 50, "head-to-head is not color balanced")
+    white_games = sum(record.get("adaptive_color") == "white" for record in records)
+    black_games = sum(record.get("adaptive_color") == "black" for record in records)
+    _require(white_games == black_games == 50, "head-to-head is not color balanced")
+    interval["method"] = method
     return interval
 
 
@@ -780,7 +815,7 @@ def _effect_rows(
     aligned: list[dict[str, Any]],
     baseline_aulc: float,
     adaptive_aulc: float,
-    head_interval: dict[str, float | int],
+    head_interval: dict[str, Any],
     horizon: float,
 ) -> list[dict[str, Any]]:
     primary_threshold = float(config["primary_metric"]["practical_effect_tolerance"]["improvement_at_or_above_elo"])
@@ -802,6 +837,12 @@ def _effect_rows(
     h2h_score = float(head_interval["score_rate"])
     h2h_low = float(head_interval["ci95_low"])
     h2h_high = float(head_interval["ci95_high"])
+    h2h_method = str(head_interval.get("method", "unknown_bootstrap"))
+    h2h_scope = (
+        "50_seed_pair_units_100_technically_valid_colour_swapped_games"
+        if h2h_method == "nonparametric_seed_pair_bootstrap"
+        else "100_technically_valid_colour_swapped_games"
+    )
     time_assessable = not baseline_censored and not adaptive_censored
     common = {
         "ci95_low": "",
@@ -921,8 +962,8 @@ def _effect_rows(
             ci95_low=h2h_low,
             ci95_high=h2h_high,
             assessment="supporting" if h2h_low > 0.5 else "not_supporting",
-            evidence_scope="100_technically_valid_colour_swapped_games",
-            notes="support depends on the color-stratified 95% CI lower bound, not the point estimate",
+            evidence_scope=h2h_scope,
+            notes=f"support depends on the {h2h_method} 95% CI lower bound, not the point estimate",
         ),
     ]
 
@@ -1060,7 +1101,10 @@ def _not_assessable_outputs(
 def execute(config_path: Path, output_override: Path | None = None) -> str:
     config_path = config_path.expanduser().resolve()
     config = _load_yaml(config_path)
-    _require(config.get("config_id") == "h3_v2", "protocol config_id must be h3_v2")
+    _require(
+        config.get("config_id") in {"h3_v2", "h3_v3"},
+        "protocol config_id must be h3_v2 or h3_v3",
+    )
     output_dir = (
         output_override.expanduser().resolve()
         if output_override is not None
@@ -1126,14 +1170,18 @@ def execute(config_path: Path, output_override: Path | None = None) -> str:
         )
         head_records = _load_jsonl(paths["head_to_head_records"])
         head_summary = _load_json(paths["head_to_head_summary"])
+        head_metric_config = config["other_strength_metrics"]["final_head_to_head"]
         head_interval = _audited(
             audit,
-            "head_to_head.valid_games_and_colour_stratified_ci",
+            "head_to_head.valid_games_trajectory_diversity_and_registered_ci",
             lambda: _validate_head_to_head(
                 head_records,
                 head_summary,
                 horizon,
                 str(manifest["inputs"]["head_to_head_records"]["actual_sha256"]),
+                head_metric_config.get(
+                    "minimum_unique_trajectories_per_adaptive_colour"
+                ),
             ),
         )
         h2_payload = _load_json(paths["h2_decision"])
