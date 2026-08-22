@@ -1,0 +1,146 @@
+schema_version: 2
+config_id: h3_v2
+status: frozen
+
+revision:
+  supersedes: h3_v1
+  reason: consume the completed v2 Adaptive evaluations and write the formal H3 v2 analysis
+
+analysis_scope:
+  analysis_only: true
+  controls_training: false
+  pilot_results_eligible: false
+
+hypothesis:
+  id: H3
+  statement: Across the common GPU-hour horizon, Adaptive improves playing-strength utility and is not supported only by checkpoint selection.
+
+outputs:
+  root: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2
+  resolved_protocol: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/input_manifest.json
+  input_audit: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/input_audit.json
+  aligned_strength: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/aligned_strength.csv
+  utility_curve: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/utility_curve.csv
+  effects: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/effects.csv
+  decision: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/decision.json
+  summary: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/summary.json
+  run_log: outputs/adaptive_seed1001_4090_v2_analysis/h3_v2/run.log
+
+input_integrity:
+  algorithm: sha256
+  audit_before_analysis: true
+  record_all_actual_hashes_in: outputs.input_manifest
+  generated_output_hashes_are_recorded_not_pre_registered: true
+  failure_policy: not_assessable
+
+inputs:
+  matched_compute:
+    path: configs/matched_compute_v1.yaml
+    sha256: 1947b3ab4918355ed1354248f679e344efd77be2f0c87a8ce3e22c85614246e6
+  baseline_fixed_basket_records:
+    path: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/games.jsonl
+    sha256: 228b088fd09bf584e424fb5d81eb3309d7496316cb15d6e9bae7baf2d1b95425
+  baseline_fixed_basket_checkpoint_summary:
+    path: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/checkpoint_summary.csv
+    sha256: 44f528e10907572637c361e48b25649f36c5480f77ff79bf36eba89503074155
+  adaptive_fixed_basket_protocol:
+    path: configs/adaptive_fixed_basket_v2.yaml
+    sha256: 6aab5d356ca108dcf0dd198f313030092b621202a15f4ae58233ad0fb3f03444
+  adaptive_fixed_basket_records:
+    path: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v2/games.jsonl
+    sha256: null
+  adaptive_fixed_basket_checkpoint_summary:
+    path: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v2/checkpoint_summary.csv
+    sha256: null
+  joint_elo_summary:
+    path: outputs/adaptive_seed1001_4090_v2_analysis/fixed_basket_v2/joint_elo_summary.csv
+    sha256: null
+  head_to_head_protocol:
+    path: configs/head_to_head_v2.yaml
+    sha256: 6ff29f87af71c7019228d09155887068d2c31e3f5574260032712aa21b0533b0
+  head_to_head_records:
+    path: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/games.jsonl
+    sha256: null
+  head_to_head_summary:
+    path: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/summary.json
+    sha256: null
+  h2_protocol:
+    path: configs/h2_v2.yaml
+    sha256: 0e51e0adff1d9bc0d30fb2667019d0c6d23e2df31e0dc61d4b49f0c31f289edb
+  h2_decision:
+    path: outputs/adaptive_seed1001_4090_v2_analysis/h2_v1/decision.json
+    sha256: null
+
+gpu_hour_alignment:
+  common_horizon_source: matched_compute.pairing_and_randomness.checkpoint_grid.targets[-1].gpu_hours_capped_by_compute_budget
+  x_coordinate: matched_baseline_reference_gpu_hour_target
+  require_same_targets_for_baseline_and_adaptive: true
+  require_checkpoint_0: true
+  require_common_horizon_endpoint: true
+  interpolation: piecewise_linear_between_observed_points
+  extrapolation: none
+
+primary_metric:
+  name: normalized_joint_elo_aulc
+  integration: trapezoidal
+  normalization: divide_by_common_horizon
+  effect: adaptive_minus_baseline
+  practical_effect_tolerance:
+    improvement_at_or_above_elo: 20.0
+    material_deterioration_at_or_below_elo: -20.0
+
+other_strength_metrics:
+  final_joint_elo:
+    effect: adaptive_minus_baseline
+    support_threshold_elo: 20.0
+  final_fixed_basket_macro_score:
+    formula: equal_weight_mean_of_four_opponent_score_rates
+    effect: adaptive_minus_baseline
+    support_threshold_absolute_score: 0.02
+  best_observed_joint_elo:
+    tie_break: earliest_gpu_hour_target
+    descriptive_only: true
+  time_to_macro_score:
+    threshold: 0.86
+    crossing_rule: first_observed_target_at_or_above_threshold
+    interpolation: none
+    failure_to_reach: right_censored_at_common_horizon
+    lower_is_better: true
+  observed_maximum_drawdown:
+    definition: maximum_of_running_best_minus_current_over_observed_grid
+    effect: baseline_minus_adaptive
+    support_threshold_elo: 10.0
+  final_head_to_head:
+    score_formula: adaptive_wins_plus_half_draws_divided_by_100_valid_games
+    confidence_interval: adaptive_colour_stratified_bootstrap_95_percent
+    support_rule: ci95_lower_bound_strictly_greater_than_0.5
+
+corroborating_support:
+  final_support: final_joint_elo_or_final_fixed_basket_macro_score
+  stability_support: observed_maximum_drawdown
+  head_to_head_support: final_head_to_head
+  any_consistent_support: final_support_or_stability_support_or_head_to_head_support
+
+decision:
+  statuses:
+    - supported
+    - partially_supported
+    - not_supported
+    - not_assessable
+  supported: primary_effect_meets_threshold_and_any_consistent_support
+  partially_supported: exactly_one_of_primary_improvement_and_any_consistent_support
+  not_supported: primary_effect_below_threshold_and_no_consistent_support
+  not_assessable: input_audit_failed_or_shared_grid_incomplete_or_endpoint_missing_or_joint_elo_not_from_one_joint_fit
+
+attribution:
+  h3_decision_independent_of_h2_decision: true
+  require_h2_support_for_replay_mechanism_claim: true
+  require_h3_support_for_performance_improvement_claim: true
+  h3_supported_without_h2_support: performance_improvement_without_replay_mechanism_attribution
+
+missing_values:
+  non_finite_numeric_value: error
+  missing_shared_grid_point: not_assessable
+  imputation: none
+  extrapolation: none
