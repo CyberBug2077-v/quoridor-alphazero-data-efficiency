@@ -1,0 +1,127 @@
+schema_version: 2
+config_id: head_to_head_v2
+status: frozen
+
+revision:
+  supersedes: head_to_head_v1
+  reason: v2_output_and_executable_paired_checkpoint_evaluation
+
+outputs:
+  root: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2
+  resolved_config: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/resolved_config.yaml
+  input_manifest: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/input_manifest.json
+  evaluation_manifest: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/evaluation_manifest.json
+  attempts: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/attempts.jsonl
+  games: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/games.jsonl
+  checkpoint_pairs: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/checkpoint_pairs.csv
+  checkpoint_summary: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/checkpoint_summary.csv
+  summary: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/summary.json
+  evaluation_log: outputs/adaptive_seed1001_4090_v2_analysis/head_to_head_v2/evaluation.log
+
+matched_compute:
+  path: configs/matched_compute_v1.yaml
+  expected_sha256: 1947b3ab4918355ed1354248f679e344efd77be2f0c87a8ce3e22c85614246e6
+  common_horizon_source: pairing_and_randomness.checkpoint_grid.targets[-1].gpu_hours
+
+conditions:
+  baseline:
+    run_id: baseline_reproduction_seed1001_4090
+    run_root: ../baseline/outputs/baseline_reproduction_seed1001_4090
+    resolved_config: ../baseline/outputs/baseline_reproduction_seed1001_4090/resolved_config.yaml
+    checkpoint_manifest: ../baseline/outputs/baseline_seed1001_4090_analysis/fixed_basket_v1/checkpoint_manifest.json
+    checkpoint_manifest_expected_sha256: 1c95d83a4f239e6af93cbfc17dbe99434ae90d10597d137749f77a249ccce607
+    gpu_hours_source: matched_compute.pairing_and_randomness.checkpoint_grid.targets
+  adaptive:
+    run_id: adaptive_formal_seed1001_4090_v2
+    run_root: outputs/adaptive_formal_seed1001_4090_v2
+    resolved_config: outputs/adaptive_formal_seed1001_4090_v2/resolved_config.yaml
+    checkpoint_manifest: outputs/adaptive_formal_seed1001_4090_v2/checkpoint_manifest.json
+    checkpoint_manifest_expected_sha256: fc564a22cd4f7224a8d776c8cc3dffc3098442835404a8f6d2b60c240fe8f469
+    gpu_hours_source: checkpoint_manifest.checkpoints[].actual_gpu_hours
+
+model_selection:
+  rule: latest_completed_checkpoint_not_after_common_horizon
+  axis: gpu_hours
+  allow_best_checkpoint: false
+  allow_outcome_based_substitution: false
+  interpolation: forbidden
+  require_both_checkpoints: true
+
+games:
+  seed_pairs: 50
+  games_per_seed: 2
+  technically_valid_games: 100
+  colours_per_seed:
+    - adaptive_white
+    - adaptive_black
+  seed:
+    base_seed: 91001
+    algorithm: first_64_bits_big_endian_of_sha256
+    payload_fields:
+      - config_id
+      - base_seed
+      - baseline_checkpoint_sha256
+      - adaptive_checkpoint_sha256
+      - zero_based_seed_pair_index
+    separator: ascii_unit_separator_0x1f
+  stable_game_key:
+    fields:
+      - baseline_checkpoint_sha256
+      - adaptive_checkpoint_sha256
+      - zero_based_seed_pair_index
+      - adaptive_colour
+    encoding: sha256_of_canonical_json
+  max_turns: 150
+
+model_protocol:
+  board_size_source: condition_resolved_configs.model.board_size
+  use_mcts: true
+  mcts_simulations: 200
+  eval_mcts_in_batch: 4
+  cpuct: 1.25
+  temperature: 0.0
+  dirichlet_noise: false
+  clear_tree_each_move: true
+  reset_tree_before_each_game: true
+  identical_for_both_conditions: true
+
+technical_failures:
+  categories: [invalid_move, bot_error]
+  technically_valid: false
+  write_every_attempt_to: outputs.attempts
+  write_only_technically_valid_games_to: outputs.games
+  count_in_formal_denominator: false
+  retry_same_stable_game_key_only: true
+  retry_same_seed_and_colours: true
+  explicit_retry_key_required_after_failure: true
+  non_technical_outcome_retry: forbidden
+
+persistence:
+  append_flush_fsync_each_attempt: true
+  append_flush_fsync_each_valid_game: true
+  recover_valid_attempt_missing_from_games: true
+  duplicate_valid_game_key: error
+  resume_skips_valid_game_keys: true
+
+analysis:
+  perspective: adaptive
+  score_rate: (adaptive_wins + 0.5 * draws) / 100
+  bootstrap:
+    method: nonparametric_stratified_bootstrap
+    strata: [adaptive_colour]
+    resamples: 10000
+    seed: 92001
+    confidence_level: 0.95
+    interval: percentile
+    preserve_games_per_colour: 50
+  h3_support_rule: score_rate_ci95_low > 0.5
+
+acceptance:
+  technically_valid_games: 100
+  seed_pairs: 50
+  games_per_seed_pair: 2
+  games_per_adaptive_colour: 50
+  unique_stable_game_keys: 100
+  selected_checkpoint_may_exceed_common_horizon: false
+  require_colour_stratified_bootstrap: true
+

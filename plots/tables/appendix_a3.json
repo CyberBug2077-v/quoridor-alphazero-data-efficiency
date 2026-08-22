@@ -1,0 +1,66 @@
+{
+  "actual_training_resources": {
+    "run_status": {
+      "baseline": "Completed",
+      "adaptive": "Completed"
+    },
+    "completed_iterations": {
+      "baseline": 210,
+      "adaptive": 215
+    },
+    "gpu_hours": {
+      "baseline": 20.004,
+      "adaptive": 24.055
+    },
+    "self_play_hours": {
+      "baseline": 16.288,
+      "adaptive": 20.129
+    },
+    "training_hours": {
+      "baseline": 3.521,
+      "adaptive": 3.564
+    },
+    "other_iteration_overhead_hours": {
+      "baseline": 0.195,
+      "adaptive": 0.362
+    },
+    "self_play_fraction_percent": {
+      "baseline": 81.42,
+      "adaptive": 83.68
+    },
+    "training_fraction_percent": {
+      "baseline": 17.6,
+      "adaptive": 14.82
+    },
+    "peak_gpu_memory_mib": {
+      "baseline": 6848.4,
+      "adaptive": 6848.4
+    }
+  },
+  "completed_workload_and_throughput": {
+    "self_play_games": {
+      "baseline": 15750,
+      "adaptive": 22159
+    },
+    "generated_positions": {
+      "baseline": 426061,
+      "adaptive": 539469
+    },
+    "optimiser_steps": {
+      "baseline": 65492,
+      "adaptive": 67996
+    },
+    "games_per_gpu_hour": {
+      "baseline": 787.34,
+      "adaptive": 921.17
+    },
+    "positions_per_gpu_hour": {
+      "baseline": 21298.62,
+      "adaptive": 22426.3
+    },
+    "final_replay_occupancy": {
+      "baseline": 284234,
+      "adaptive": 377821
+    }
+  }
+}
